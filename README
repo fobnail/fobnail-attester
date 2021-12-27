@@ -1,0 +1,12 @@
+This project is aimed to provide an Attester implementation
+for Attestation process which also should include local (and remote)
+plaform provisioning.
+
+As for attestation itself the Fobnail/charra (https://github.com/fobnail/charra)
+project could be used as an example and the base of future extentions.
+It provides a simple (not full) interaction between Attester and Verifier
+over CHARRA protocol.
+
+But local (and remote) provisioning must be performed before the attestation
+starts.
+
