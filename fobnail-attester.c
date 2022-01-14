@@ -23,7 +23,28 @@ static void coap_attest_handler(struct coap_resource_t* resource, struct coap_se
 				const struct coap_pdu_t* in, const struct coap_string_t* query,
 				struct coap_pdu_t* out)
 {
-	fprintf(stdout, "Received message.\n");
+	int ret;
+	char *res_buf = "Response from server.\n";
+	size_t res_buf_len = strlen(res_buf);
+
+	printf("Received message.\n");
+
+	/* prepare and send response */
+	ret = coap_add_data_large_response(resource,
+					   session,
+					   in,
+					   out,
+					   query,
+					   COAP_MEDIATYPE_APPLICATION_CBOR,
+					   -1,
+					   0,
+					   res_buf_len,
+					   res_buf,
+					   NULL,
+					   res_buf);
+	if (ret != 0)
+		fprintf(stderr, "Err: cannot response.\n");
+
 }
 
 void att_coap_add_resource(struct coap_context_t* coap_context,
