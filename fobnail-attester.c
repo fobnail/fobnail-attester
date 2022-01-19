@@ -43,7 +43,7 @@ static void coap_attest_handler(struct coap_resource_t* resource, struct coap_se
 					   res_buf,
 					   NULL,
 					   res_buf);
-	if (ret != 0)
+	if (ret == 0)
 		fprintf(stderr, "Err: cannot response.\n");
 
 }
