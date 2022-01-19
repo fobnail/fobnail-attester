@@ -10,6 +10,8 @@
 #include <signal.h>
 #include <stdbool.h>
 
+#include "server_api.h"
+
 static bool quit = false;
 static const char LISTEN_ADDRESS[] = "0.0.0.0";
 static unsigned int port = COAP_DEFAULT_PORT; /* default port 5683 */
@@ -127,6 +129,7 @@ int main(int argc, char *argv[])
 	/* register CoAP resource and resource handler */
 	printf("Registering CoAP resources.\n");
 	att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "attest", coap_attest_handler);
+	att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "metadata", coap_attest_handler);
 
 	/* enter main loop */
 	printf("Entering main loop.\n");

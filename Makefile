@@ -4,6 +4,6 @@ BIN=fobnail-attester
 #LDFLAGS="-lcoap"
 
 all:
-	$(CC) $(CFLAGS) -o $(BIN) fobnail-attester.c -lcoap-3
+	$(CC) $(CFLAGS) -o $(BIN) fobnail-attester.c meta.c -lcoap-3
 clean:
 	rm -f $(BIN)
