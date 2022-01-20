@@ -129,7 +129,7 @@ int main(int argc, char *argv[])
 	/* register CoAP resource and resource handler */
 	printf("Registering CoAP resources.\n");
 	att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "attest", coap_attest_handler);
-	att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "metadata", coap_attest_handler);
+	att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "metadata", coap_metadata_fetch_handler);
 
 	/* enter main loop */
 	printf("Entering main loop.\n");
