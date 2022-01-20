@@ -29,6 +29,7 @@ struct EKcert_hash {
 
 /* Structure for meta data for provisioning and attestation */
 struct meta_data {
+	uint8_t		     header_version;
 	uint8_t              mac[6];         /* MAC address */
 	struct serial_number sn;       /* Serial number */
 	struct EKcert_hash  EK_hash;  /* EKcert hash */       
