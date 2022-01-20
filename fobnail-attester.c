@@ -30,6 +30,7 @@ static void coap_attest_handler(struct coap_resource_t* resource, struct coap_se
 	printf("Received message.\n");
 
 	/* prepare and send response */
+	coap_pdu_set_code(out, COAP_RESPONSE_CODE_CONTENT);
 	ret = coap_add_data_large_response(resource,
 					   session,
 					   in,
@@ -42,7 +43,7 @@ static void coap_attest_handler(struct coap_resource_t* resource, struct coap_se
 					   res_buf,
 					   NULL,
 					   res_buf);
-	if (ret != 0)
+	if (ret == 0)
 		fprintf(stderr, "Err: cannot response.\n");
 
 }
