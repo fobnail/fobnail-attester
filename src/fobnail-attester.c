@@ -11,6 +11,7 @@
 #include <stdbool.h>
 
 #include <fobnail-attester/meta.h>
+#include <fobnail-attester/tpm2-crypto.h>
 
 static volatile sig_atomic_t quit = 0;
 static const char LISTEN_ADDRESS[] = "0.0.0.0";
@@ -111,6 +112,7 @@ int main(int UNUSED argc, char UNUSED *argv[])
     }*/
 
     /* TODO: generate attestation identity key */
+    att_generate_id_key();
 
     /* TODO: sign attestation identity key */
 
