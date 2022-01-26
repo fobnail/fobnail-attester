@@ -10,6 +10,8 @@
 #include <signal.h>
 #include <stdbool.h>
 
+#include <meta.h>
+
 static bool quit = false;
 static const char LISTEN_ADDRESS[] = "0.0.0.0";
 static unsigned int port = COAP_DEFAULT_PORT; /* default port 5683 */
