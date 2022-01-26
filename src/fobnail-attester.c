@@ -10,15 +10,15 @@
 #include <signal.h>
 #include <stdbool.h>
 
-#include <meta.h>
+#include <fobnail-attester/meta.h>
 
-static bool quit = false;
+static volatile sig_atomic_t quit = 0;
 static const char LISTEN_ADDRESS[] = "0.0.0.0";
 static unsigned int port = COAP_DEFAULT_PORT; /* default port 5683 */
 
-static void handle_sigint(int signum)
+static void signal_handler(int signum)
 {
-    quit = true;
+    quit = signum;
 }
 
 static void coap_attest_handler(struct coap_resource_t* resource, struct coap_session_t* session,
@@ -42,7 +42,7 @@ static void coap_attest_handler(struct coap_resource_t* resource, struct coap_se
                        -1,
                        0,
                        res_buf_len,
-                       res_buf,
+                       (const uint8_t *)res_buf,
                        NULL,
                        res_buf);
     if (ret == 0)
@@ -93,12 +93,15 @@ coap_context_t* att_coap_new_context(const bool enable_coap_block_mode)
 
 /* --------------------------- main ----------------------------- */
 
-int main(int argc, char *argv[])
+#define UNUSED  __attribute__((unused))
+
+int main(int UNUSED argc, char UNUSED *argv[])
 {
     int result;
 
     /* signal handling */
-    signal(SIGINT, handle_sigint);
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
 
     /* TODO: parse CLI arguments if needed */
     /*result = parse_command_line_arguments(argc, argv, ...) != 0
