@@ -1,0 +1,4 @@
+bin/fobnail-attester
+obj/*.o
+tags
+
