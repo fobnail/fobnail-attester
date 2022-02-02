@@ -80,7 +80,7 @@ static TPM2B_PUBLIC keyTemplate = {
     }
 };
 
-TSS2_RC att_generate_id_key(void)
+TSS2_RC att_generate_aik_key(void)
 {
     TSS2_RC 	   tss_ret = TSS2_RC_SUCCESS;
     ESYS_CONTEXT	   *esys_ctx = NULL;

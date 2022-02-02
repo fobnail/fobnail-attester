@@ -112,7 +112,7 @@ int main(int UNUSED argc, char UNUSED *argv[])
     }*/
 
     /* TODO: generate attestation identity key */
-    att_generate_id_key();
+    att_generate_aik_key();
 
     /* TODO: sign attestation identity key */
 
