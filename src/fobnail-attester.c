@@ -9,6 +9,7 @@
 #include <coap3/coap.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <tss2/tss2_tpm2_types.h>
 
 #include <fobnail-attester/meta.h>
 #include <fobnail-attester/tpm2-crypto.h>
@@ -111,8 +112,11 @@ int main(int UNUSED argc, char UNUSED *argv[])
         return (result == 1) ? EXIT_SUCCESS : EXIT_FAILURE;
     }*/
 
-    /* TODO: generate attestation identity key */
-    att_generate_aik_key();
+    /* Generate attestation identity key */
+    if (att_generate_aik_key() != TSS2_RC_SUCCESS) {
+        printf("Cannot generate AIK\n");
+        return EXIT_FAILURE;
+    }
 
     /* TODO: sign attestation identity key */
 
