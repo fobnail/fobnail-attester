@@ -65,3 +65,26 @@ cd tpm2-tools
 make -j
 ```
 
+## Running the fobnail-attester
+
+The fobnail-attester needs to interact with TPM device.
+In order to connect to TPM device on system the `fobnail-attester`
+uses shared library `libtss2-tcti*.so`. By default if this is not
+additionally configured this library performs following steps:
+
+1. It tries to open corresponding device files "/dev/tpmrm0" or "/dev/tpm0".
+   In this case operation requires CAP_SYS_ADMIN capability for process.
+   In other words it must be run with superuser rights, e.g.:
+```shell
+$ sudo ./bin/fobnail-attester
+```
+
+2. If the first step failed then the the application creates a TCP socket and
+   connects to TPM Simulator (TPM Server).
+   The default parameters for TCP connection are: address - localhost (127.0.0.1),
+   destination ports are 2321 and 2322.
+   The port number 2321 is used for reciving TPM commands and port number 2322
+   is used for Platform commands.
+
+In the worst case the program returns error.
+
