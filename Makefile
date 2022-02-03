@@ -33,6 +33,8 @@ INCLUDE = -I$(INCDIR)
 
 OBJECTS =   $(addsuffix .o, $(OBJDIR)/fobnail-attester)
 OBJECTS +=  $(addsuffix .o, $(OBJDIR)/tpm2-crypto)
+OBJECTS +=  $(addsuffix .o, $(OBJDIR)/meta)
+OBJECTS +=  $(addsuffix .o, $(OBJDIR)/aik)
 
 TARGETS = $(addprefix $(BINDIR)/, fobnail-attester)
 
