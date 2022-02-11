@@ -129,7 +129,7 @@ TSS2_RC att_generate_aik_key(void)
         goto error;
     }
 
-    tss_ret = Esys_CreatePrimary(esys_ctx, ESYS_TR_RH_OWNER, ESYS_TR_PASSWORD,
+    tss_ret = Esys_CreatePrimary(esys_ctx, ESYS_TR_RH_ENDORSEMENT, ESYS_TR_PASSWORD,
                                  ESYS_TR_NONE, ESYS_TR_NONE, &primarySensitive,
                                  &primaryRsaTemplate, &outsideInfo, &creationPCR,
                                  &parent, NULL, NULL, NULL, NULL);
