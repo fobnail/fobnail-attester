@@ -134,6 +134,7 @@ TSS2_RC att_generate_aik_key(void)
         fprintf(stderr, "Error: Esys_GetCapability()\n");
         goto error;
     }
+    Esys_Free(capabilityData);
 
     tss_ret = Esys_CreatePrimary(esys_ctx, ESYS_TR_RH_ENDORSEMENT, ESYS_TR_PASSWORD,
                                  ESYS_TR_NONE, ESYS_TR_NONE, &primarySensitive,
@@ -151,6 +152,9 @@ TSS2_RC att_generate_aik_key(void)
         fprintf(stderr, "Error: Esys_Create()\n");
         goto error;
     }
+    /* TODO: do what needs to be done with keys before they are freed */
+    Esys_Free(keyPrivate);
+    Esys_Free(keyPublic);
 
 error:
     if (esys_ctx != NULL)
