@@ -117,6 +117,12 @@ TSS2_RC att_generate_aik_key(void)
         goto error;
     }
 
+    tss_ret = Esys_Startup(esys_ctx, TPM2_SU_CLEAR);
+    if (tss_ret != TSS2_RC_SUCCESS){
+        printf("Error: Esys_Startup()\n");
+        goto error;
+    }
+
     if ((tss_ret = Esys_TR_SetAuth(esys_ctx, ESYS_TR_RH_OWNER, &ownerauth)) != TSS2_RC_SUCCESS) {
         fprintf(stderr, "Error: Esys_TR_SetAuth()\n");
         goto error;
