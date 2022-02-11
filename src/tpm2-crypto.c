@@ -82,13 +82,13 @@ static TPM2B_PUBLIC keyTemplate = {
 
 TSS2_RC att_generate_aik_key(void)
 {
-    TSS2_RC 	   tss_ret = TSS2_RC_SUCCESS;
-    ESYS_CONTEXT	   *esys_ctx = NULL;
-    TSS2_TCTI_CONTEXT  *tcti_ctx = NULL;
-    ESYS_TR 	   parent = ESYS_TR_NONE;
-    TPM2B_PUBLIC 	   *keyPublic = NULL;
-    TPM2B_PRIVATE	   *keyPrivate = NULL;
-    TPM2B_PUBLIC	   inPublic = keyTemplate;
+    TSS2_RC                tss_ret = TSS2_RC_SUCCESS;
+    ESYS_CONTEXT          *esys_ctx = NULL;
+    TSS2_TCTI_CONTEXT     *tcti_ctx = NULL;
+    ESYS_TR                parent = ESYS_TR_NONE;
+    TPM2B_PUBLIC          *keyPublic = NULL;
+    TPM2B_PRIVATE         *keyPrivate = NULL;
+    TPM2B_PUBLIC           inPublic = keyTemplate;
     TPM2B_SENSITIVE_CREATE inSensitive = {
         .sensitive = {
             .userAuth = {
@@ -100,10 +100,10 @@ TSS2_RC att_generate_aik_key(void)
         }
     };
 
-    TPM2B_DATA outsideInfo = { .size = 0, };
-    TPML_PCR_SELECTION creationPCR = { .count = 0, };
-    TPM2B_DIGEST ownerauth = { .size = 0 };
-    TPMS_CAPABILITY_DATA *capabilityData = NULL;
+    TPM2B_DATA             outsideInfo = { .size = 0, };
+    TPML_PCR_SELECTION     creationPCR = { .count = 0, };
+    TPM2B_DIGEST           ownerauth = { .size = 0 };
+    TPMS_CAPABILITY_DATA  *capabilityData = NULL;
 
     /* Initialize the Esys context */
 
