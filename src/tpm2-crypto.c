@@ -5,6 +5,43 @@
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_tctildr.h>
 
+/* Release any transient objects that may have been allocated by commands.
+ *
+ * Note: this also unloads EK, which (along with AIK) will be needed for further
+ * steps. Both of them would have to be recreated or (re-)loaded for each task
+ * that requires them, or skipped here from flushing (in which case this
+ * function doesn't even have to be called for each step). They still should be
+ * flushed when whole application is terminated.
+ */
+static void flush_tpm_contexts(ESYS_CONTEXT *esys_ctx)
+{
+    TPMI_YES_NO more_data = TPM2_YES;
+    TPM2_HANDLE hndl = TPM2_TRANSIENT_FIRST;
+
+    while (more_data == TPM2_YES) {
+        TPMS_CAPABILITY_DATA *cap_data = NULL;
+        TPML_HANDLE          *hlist;
+        ESYS_TR               tr_handle;
+
+        Esys_GetCapability(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                           TPM2_CAP_HANDLES, hndl, 1,
+                           &more_data, &cap_data);
+
+        hlist = &cap_data->data.handles;
+        if (hlist->count == 0)
+            break;
+
+        hndl = hlist->handle[0];
+        printf("Flushing object with handle %8.8x\n", hndl);
+
+        Esys_TR_FromTPMPublic(esys_ctx, hndl++, ESYS_TR_NONE, ESYS_TR_NONE,
+                              ESYS_TR_NONE, &tr_handle);
+        Esys_FlushContext(esys_ctx, tr_handle);
+
+        Esys_Free(cap_data);
+    }
+}
+
 static TPM2B_SENSITIVE_CREATE primarySensitive = {
     .sensitive = {
         .userAuth = {
@@ -157,8 +194,10 @@ TSS2_RC att_generate_aik_key(void)
     Esys_Free(keyPublic);
 
 error:
-    if (esys_ctx != NULL)
+    if (esys_ctx != NULL) {
+        flush_tpm_contexts(esys_ctx);
         Esys_Finalize(&esys_ctx);
+    }
 
     if (tcti_ctx != NULL)
         Tss2_TctiLdr_Finalize(&tcti_ctx);
