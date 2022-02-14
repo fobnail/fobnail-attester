@@ -5,6 +5,43 @@
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_tctildr.h>
 
+/* Release any transient objects that may have been allocated by commands.
+ *
+ * Note: this also unloads EK, which (along with AIK) will be needed for further
+ * steps. Both of them would have to be recreated or (re-)loaded for each task
+ * that requires them, or skipped here from flushing (in which case this
+ * function doesn't even have to be called for each step). They still should be
+ * flushed when whole application is terminated.
+ */
+static void flush_tpm_contexts(ESYS_CONTEXT *esys_ctx)
+{
+    TPMI_YES_NO more_data = TPM2_YES;
+    TPM2_HANDLE hndl = TPM2_TRANSIENT_FIRST;
+
+    while (more_data == TPM2_YES) {
+        TPMS_CAPABILITY_DATA *cap_data = NULL;
+        TPML_HANDLE          *hlist;
+        ESYS_TR               tr_handle;
+
+        Esys_GetCapability(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                           TPM2_CAP_HANDLES, hndl, 1,
+                           &more_data, &cap_data);
+
+        hlist = &cap_data->data.handles;
+        if (hlist->count == 0)
+            break;
+
+        hndl = hlist->handle[0];
+        printf("Flushing object with handle %8.8x\n", hndl);
+
+        Esys_TR_FromTPMPublic(esys_ctx, hndl++, ESYS_TR_NONE, ESYS_TR_NONE,
+                              ESYS_TR_NONE, &tr_handle);
+        Esys_FlushContext(esys_ctx, tr_handle);
+
+        Esys_Free(cap_data);
+    }
+}
+
 static TPM2B_SENSITIVE_CREATE primarySensitive = {
     .sensitive = {
         .userAuth = {
@@ -82,13 +119,13 @@ static TPM2B_PUBLIC keyTemplate = {
 
 TSS2_RC att_generate_aik_key(void)
 {
-    TSS2_RC 	   tss_ret = TSS2_RC_SUCCESS;
-    ESYS_CONTEXT	   *esys_ctx = NULL;
-    TSS2_TCTI_CONTEXT  *tcti_ctx = NULL;
-    ESYS_TR 	   parent = ESYS_TR_NONE;
-    TPM2B_PUBLIC 	   *keyPublic = NULL;
-    TPM2B_PRIVATE	   *keyPrivate = NULL;
-    TPM2B_PUBLIC	   inPublic = keyTemplate;
+    TSS2_RC                tss_ret = TSS2_RC_SUCCESS;
+    ESYS_CONTEXT          *esys_ctx = NULL;
+    TSS2_TCTI_CONTEXT     *tcti_ctx = NULL;
+    ESYS_TR                parent = ESYS_TR_NONE;
+    TPM2B_PUBLIC          *keyPublic = NULL;
+    TPM2B_PRIVATE         *keyPrivate = NULL;
+    TPM2B_PUBLIC           inPublic = keyTemplate;
     TPM2B_SENSITIVE_CREATE inSensitive = {
         .sensitive = {
             .userAuth = {
@@ -100,10 +137,10 @@ TSS2_RC att_generate_aik_key(void)
         }
     };
 
-    TPM2B_DATA outsideInfo = { .size = 0, };
-    TPML_PCR_SELECTION creationPCR = { .count = 0, };
-    TPM2B_DIGEST ownerauth = { .size = 0 };
-    TPMS_CAPABILITY_DATA *capabilityData = NULL;
+    TPM2B_DATA             outsideInfo = { .size = 0, };
+    TPML_PCR_SELECTION     creationPCR = { .count = 0, };
+    TPM2B_DIGEST           ownerauth = { .size = 0 };
+    TPMS_CAPABILITY_DATA  *capabilityData = NULL;
 
     /* Initialize the Esys context */
 
@@ -114,6 +151,12 @@ TSS2_RC att_generate_aik_key(void)
 
     if ((tss_ret = Esys_Initialize(&esys_ctx, tcti_ctx, NULL)) != TSS2_RC_SUCCESS) {
         fprintf(stderr, "Error: Esys_Initialize()\n");
+        goto error;
+    }
+
+    tss_ret = Esys_Startup(esys_ctx, TPM2_SU_CLEAR);
+    if (tss_ret != TSS2_RC_SUCCESS){
+        printf("Error: Esys_Startup()\n");
         goto error;
     }
 
@@ -128,8 +171,9 @@ TSS2_RC att_generate_aik_key(void)
         fprintf(stderr, "Error: Esys_GetCapability()\n");
         goto error;
     }
+    Esys_Free(capabilityData);
 
-    tss_ret = Esys_CreatePrimary(esys_ctx, ESYS_TR_RH_OWNER, ESYS_TR_PASSWORD,
+    tss_ret = Esys_CreatePrimary(esys_ctx, ESYS_TR_RH_ENDORSEMENT, ESYS_TR_PASSWORD,
                                  ESYS_TR_NONE, ESYS_TR_NONE, &primarySensitive,
                                  &primaryRsaTemplate, &outsideInfo, &creationPCR,
                                  &parent, NULL, NULL, NULL, NULL);
@@ -145,10 +189,15 @@ TSS2_RC att_generate_aik_key(void)
         fprintf(stderr, "Error: Esys_Create()\n");
         goto error;
     }
+    /* TODO: do what needs to be done with keys before they are freed */
+    Esys_Free(keyPrivate);
+    Esys_Free(keyPublic);
 
 error:
-    if (esys_ctx != NULL)
+    if (esys_ctx != NULL) {
+        flush_tpm_contexts(esys_ctx);
         Esys_Finalize(&esys_ctx);
+    }
 
     if (tcti_ctx != NULL)
         Tss2_TctiLdr_Finalize(&tcti_ctx);
