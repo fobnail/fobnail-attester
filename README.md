@@ -23,7 +23,7 @@ git checkout 2a329e1c763a47a910f075aad4478398aaaea400
 ./configure --disable-tests --disable-documentation --disable-manpages --disable-dtls --disable-shared \
                --enable-fast-install
 make -j
-make install
+sudo make install
 ```
 
 Make sure that you do not have libcoap-1-0-dev installed, as the headers might conflict.
@@ -38,13 +38,13 @@ make -j
 sudo make install
 ```
 
-* Install TPM2 Simulator:
+* (Optional - when there is no discrete TPM) Install TPM2 Simulator:
 1. Download code from https://sourceforge.net/projects/ibmswtpm2/
 2. Unpack into any directory
 ```shell
 cd ./src
 make
-rm -f NVChip; ./tpm_server
+./tpm_server
 ```
 
 Or
@@ -53,19 +53,39 @@ Or
 git clone https://github.com/microsoft/ms-tpm-20-ref.git
 cd ms-tpm-20-ref/TPMCmd
 ./bootstrap && ./configure && make
+./Simulator/src/tpm2-simulator
 ```
 
-* Install tpm2-tools:
+* (Optional - debugging and recovery from bad TPM state) Install tpm2-tools:
 ```shell
-sudo apt install tpm2-tools or
+sudo apt install tpm2-tools
+```
+Or
+
+```shell
 git clone https://github.com/tpm2-software/tpm2-tools.git
 cd tpm2-tools
 ./bootstrap
 ./configure --enable-integration --disable-doxygen-doc
 make -j
+sudo make install
 ```
 
 ## Running the fobnail-attester
+
+#### TPM2 simulator only section
+
+TPM from simulator starts in partially initialized state and must be told to
+finish initialization before other commands can be used. To send Startup command
+use tool from tpm2-tools:
+```shell
+$ tpm2_startup -c
+```
+
+This should not be required for physical TPM because firmware should run this
+command during boot.
+
+#### End of TPM2 simulator only section
 
 The fobnail-attester needs to interact with TPM device.
 In order to connect to TPM device on system the `fobnail-attester`
@@ -83,8 +103,21 @@ $ sudo ./bin/fobnail-attester
    connects to TPM Simulator (TPM Server).
    The default parameters for TCP connection are: address - localhost (127.0.0.1),
    destination ports are 2321 and 2322.
-   The port number 2321 is used for reciving TPM commands and port number 2322
+   The port number 2321 is used for receiving TPM commands and port number 2322
    is used for Platform commands.
 
 In the worst case the program returns error.
 
+### Troubleshooting
+
+List below is not complete and gives most common, but not always proper
+solutions.
+
+* **Esys Finish ErrorCode (0x00000100)** - TPM_RC_INITIALIZE, returned when
+TPM2_Startup command was not send, see [TPM2 simulator only section](#tpm2-simulator-only-section).
+
+* **Esys Finish ErrorCode (0x00000902)** - TPM_RC_OBJECT_MEMORY, "out of memory
+for object contexts". May be returned when internal TPM objects were allocated
+by some commands but never freed. Can be fixed by a reboot (discrete or firmware
+TPM), restart of TPM simulator, or by running `tpm2_flushcontext -t` which
+releases transient objects.
