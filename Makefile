@@ -1,5 +1,5 @@
-
-CFLAGS = -std=c99 -g -pedantic -Wall -Wextra
+# Add _DEFAULT_SOURCE macro to avoid compiler errors for some GNU expressions
+CFLAGS = -std=c99 -g -pedantic -Wall -Wextra -D_DEFAULT_SOURCE
 
 SRCDIR = src
 INCDIR = include
