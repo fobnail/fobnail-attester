@@ -1,5 +1,5 @@
-
-CFLAGS = -std=c99 -g -pedantic -Wall -Wextra
+# Add _DEFAULT_SOURCE macro to avoid compiler errors for some GNU expressions
+CFLAGS = -std=c99 -g -pedantic -Wall -Wextra -D_DEFAULT_SOURCE
 
 SRCDIR = src
 INCDIR = include
@@ -32,7 +32,7 @@ SOURCES = $(shell find $(SRCDIR) -name '*.c')
 INCLUDE = -I$(INCDIR)
 
 OBJECTS =   $(addsuffix .o, $(OBJDIR)/fobnail-attester)
-OBJECTS +=  $(addsuffix .o, $(OBJDIR)/tpm2-crypto)
+OBJECTS +=  $(addsuffix .o, $(OBJDIR)/tpm2-crypto $(OBJDIR)/meta_data)
 
 TARGETS = $(addprefix $(BINDIR)/, fobnail-attester)
 

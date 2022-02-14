@@ -35,5 +35,7 @@ struct meta_data {
     struct EKcert_hash  EK_hash;  /* EKcert hash */
 } __attribute__((packed));
 
+int get_meta_data(struct meta_data *meta);
+
 #endif /* _H_META */
 
