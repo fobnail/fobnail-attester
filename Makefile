@@ -13,7 +13,7 @@ LIBINCLUDE = -I/usr/include \
 LDPATH =     -L/usr/local/lib/ \
              -L/usr/lib/x86_64-linux-gnu
 
-LIBS =       coap-3 tss2-esys tss2-sys tss2-mu tss2-tctildr
+LIBS =       coap-3 tss2-esys tss2-sys tss2-mu tss2-tctildr tss2-rc
 
 # TCTI module to use (default is 'mssim')
 TCTI_MODULE=tss2-tcti-mssim
