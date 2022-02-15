@@ -1,9 +1,85 @@
 #include <stdio.h>
+#include <string.h>
+#include <ctype.h>      // isprint
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_mu.h>
 #include <tss2/tss2_tpm2_types.h>
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_tctildr.h>
+
+static ESYS_CONTEXT          *esys_ctx;
+static TSS2_TCTI_CONTEXT     *tcti_ctx;
+static TPM2B_PUBLIC          *keyPublic;
+static TPM2B_PRIVATE         *keyPrivate;
+
+void hexdump(const void *memory, size_t length);
+void hexdump(const void *memory, size_t length)
+{
+	size_t i, j;
+	uint8_t *line;
+	int all_zero = 0;
+	int all_one = 0;
+	size_t num_bytes;
+
+	for (i = 0; i < length; i += 16) {
+		num_bytes = length - i;
+        if (num_bytes > 16) num_bytes = 16;
+		line = ((uint8_t *)memory) + i;
+
+		all_zero++;
+		all_one++;
+		for (j = 0; j < num_bytes; j++) {
+			if (line[j] != 0) {
+				all_zero = 0;
+				break;
+			}
+		}
+
+		for (j = 0; j < num_bytes; j++) {
+			if (line[j] != 0xff) {
+				all_one = 0;
+				break;
+			}
+		}
+
+		if ((all_zero < 2) && (all_one < 2)) {
+			printf("%#8lx:", i);
+			for (j = 0; j < num_bytes; j++)
+				printf(" %02x", line[j]);
+			for (; j < 16; j++)
+				printf("   ");
+			printf("  ");
+			for (j = 0; j < num_bytes; j++)
+				printf("%c", isprint(line[j]) ? line[j] : '.');
+			printf("\n");
+		} else if ((all_zero == 2) || (all_one == 2)) {
+			printf("...\n");
+		}
+	}
+}
+
+/* Unmarshalled data uses naturally aligned fields in structures. For
+ * compatibility with other architectures these have to be marshalled before
+ * sending and unmarshalled again on target device.
+ *
+ * buf is allocated by this function but should be freed by the called.
+ *
+ * TODO: this format may not be acceptable by Fobnail. Maybe split it into hash
+ * (aka loaded key name), modulus and exponent and pack into CBOR?
+ */
+TSS2_RC get_marshalled_aik(void **buf, size_t *size)
+{
+    if (keyPublic == NULL) {
+        fprintf(stderr, "Error: get_marshalled_aik() called without AIK available\n");
+        return TSS2_BASE_RC_BAD_REFERENCE;
+    }
+
+    /* Marshalled data will not be bigger than unmarshalled one */
+    *buf = malloc(sizeof(*keyPublic));
+    *size = 0;
+    return Tss2_MU_TPM2B_PUBLIC_Marshal(keyPublic, *buf, sizeof(*keyPublic), size);
+}
+
 
 /* Release any transient objects that may have been allocated by commands.
  *
@@ -117,14 +193,10 @@ static TPM2B_PUBLIC keyTemplate = {
     }
 };
 
-TSS2_RC att_generate_aik_key(void)
+TSS2_RC init_tpm_keys(void)
 {
     TSS2_RC                tss_ret = TSS2_RC_SUCCESS;
-    ESYS_CONTEXT          *esys_ctx = NULL;
-    TSS2_TCTI_CONTEXT     *tcti_ctx = NULL;
     ESYS_TR                parent = ESYS_TR_NONE;
-    TPM2B_PUBLIC          *keyPublic = NULL;
-    TPM2B_PRIVATE         *keyPrivate = NULL;
     TPM2B_PUBLIC           inPublic = keyTemplate;
     TPM2B_SENSITIVE_CREATE inSensitive = {
         .sensitive = {
@@ -189,9 +261,10 @@ TSS2_RC att_generate_aik_key(void)
         fprintf(stderr, "Error: Esys_Create()\n");
         goto error;
     }
-    /* TODO: do what needs to be done with keys before they are freed */
-    Esys_Free(keyPrivate);
-    Esys_Free(keyPublic);
+
+    hexdump(keyPublic, sizeof(*keyPublic));
+
+    return TSS2_RC_SUCCESS;
 
 error:
     if (esys_ctx != NULL) {
@@ -203,4 +276,20 @@ error:
         Tss2_TctiLdr_Finalize(&tcti_ctx);
 
     return tss_ret;
+}
+
+/* Should not be called if init_tpm_keys() failed */
+void tpm_cleanup(void)
+{
+    memset(keyPrivate, 0, sizeof(*keyPrivate));
+    Esys_Free(keyPrivate);
+    keyPrivate = NULL;
+    memset(keyPublic, 0, sizeof(*keyPublic));
+    Esys_Free(keyPublic);
+    keyPublic = NULL;
+
+    flush_tpm_contexts(esys_ctx);
+    Esys_Finalize(&esys_ctx);
+
+    Tss2_TctiLdr_Finalize(&tcti_ctx);
 }
