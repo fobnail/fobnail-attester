@@ -10,6 +10,7 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <tss2/tss2_rc.h>
+#include <qcbor/UsefulBuf.h>
 
 #include <fobnail-attester/meta.h>
 #include <fobnail-attester/tpm2-crypto.h>
@@ -63,18 +64,14 @@ static void coap_aik_handler(struct coap_resource_t* resource, struct coap_sessi
                 const struct coap_pdu_t* in, const struct coap_string_t* query,
                 struct coap_pdu_t* out)
 {
-    TSS2_RC rc;
     int ret;
-    void *res_buf;
-    size_t res_buf_len;
 
     /* Why `query` is null? */
     printf("Received message.\n");
 
-    rc = get_marshalled_aik(&res_buf, &res_buf_len);
-    if (rc != TSS2_RC_SUCCESS) {
-        fprintf(stderr, "Err: get_marshalled_aik() failed: %s\n",
-                Tss2_RC_Decode(rc));
+    UsefulBuf ub = encode_aik();
+    if (UsefulBuf_IsNULLOrEmpty(ub)) {
+        fprintf(stderr, "Error: cannot encode AIK into CBOR\n");
         /* We probably should mention the error in response */
         quit = -1;
         return;
@@ -90,10 +87,10 @@ static void coap_aik_handler(struct coap_resource_t* resource, struct coap_sessi
                        COAP_MEDIATYPE_APPLICATION_CBOR,
                        -1,
                        0,
-                       res_buf_len,
-                       (const uint8_t *)res_buf,
+                       ub.len,
+                       ub.ptr,
                        coap_free_wrapper,
-                       res_buf);
+                       ub.ptr);
     if (ret == 0)
         fprintf(stderr, "Err: cannot response.\n");
 

@@ -1,11 +1,12 @@
 #include <stdio.h>
 #include <string.h>
-#include <ctype.h>      // isprint
+#include <ctype.h>      // isprint, for hexdump
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_mu.h>
 #include <tss2/tss2_tpm2_types.h>
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_tctildr.h>
+#include <qcbor/qcbor_encode.h>
 
 static ESYS_CONTEXT          *esys_ctx;
 static TSS2_TCTI_CONTEXT     *tcti_ctx;
@@ -58,28 +59,72 @@ void hexdump(const void *memory, size_t length)
 	}
 }
 
-/* Unmarshalled data uses naturally aligned fields in structures. For
- * compatibility with other architectures these have to be marshalled before
- * sending and unmarshalled again on target device.
- *
- * buf is allocated by this function but should be freed by the called.
- *
- * TODO: this format may not be acceptable by Fobnail. Maybe split it into hash
- * (aka loaded key name), modulus and exponent and pack into CBOR?
- */
-TSS2_RC get_marshalled_aik(void **buf, size_t *size)
+static UsefulBuf _encode_aik(UsefulBuf buf)
 {
-    if (keyPublic == NULL) {
-        fprintf(stderr, "Error: get_marshalled_aik() called without AIK available\n");
-        return TSS2_BASE_RC_BAD_REFERENCE;
-    }
+    /* From TCG Trusted Platform Module Library Part 2: Structures rev 01.59:
+     *   A TPM (...) supporting RSA shall support two primes and an exponent of
+     *   zero. An exponent of zero indicates that the exponent is the default of
+     *   2^16 + 1. Support for other values is optional.
+     */
+    /* TODO: is endianness correct? */
+    uint32_t exp_val = keyPublic->publicArea.parameters.rsaDetail.exponent;
+    if (exp_val == 0)
+        exp_val = 0x00010001;
 
-    /* Marshalled data will not be bigger than unmarshalled one */
-    *buf = malloc(sizeof(*keyPublic));
-    *size = 0;
-    return Tss2_MU_TPM2B_PUBLIC_Marshal(keyPublic, *buf, sizeof(*keyPublic), size);
+    UsefulBufC exponent = {&exp_val, sizeof(exp_val)};
+    TPM2B_PUBLIC_KEY_RSA *unique = (TPM2B_PUBLIC_KEY_RSA *)
+                                   &keyPublic->publicArea.unique;
+    UsefulBufC modulus = {&unique->buffer, unique->size};
+    /* TODO */
+    static const uint8_t ek_cert_buf[] = {0,1,2,3,4,5,6,7,8,9};
+    UsefulBufC ek_cert = {&ek_cert_buf, sizeof(ek_cert_buf)};
+
+   /* Set up the encoding context with the output buffer */
+    QCBOREncodeContext ctx;
+    QCBOREncode_Init(&ctx, buf);
+
+    /* Proceed to output all the items, letting the internal error
+     * tracking do its work */
+    QCBOREncode_OpenMap(&ctx);
+        QCBOREncode_AddInt64ToMap(&ctx, "type", 1);     /* Assume RSA */
+        QCBOREncode_OpenMapInMap(&ctx, "key");
+            QCBOREncode_AddBytesToMap(&ctx, "n", modulus);
+            QCBOREncode_AddBytesToMap(&ctx, "e", exponent);
+        QCBOREncode_CloseMap(&ctx);
+        QCBOREncode_AddBytesToMap(&ctx, "ek_cert", ek_cert /* TODO */);
+    QCBOREncode_CloseMap(&ctx);
+
+    /* Get the pointer and length of the encoded output. If there was
+     * any encoding error, it will be returned here */
+    UsefulBufC EncodedCBOR;
+    QCBORError uErr;
+    uErr = QCBOREncode_Finish(&ctx, &EncodedCBOR);
+    if(uErr != QCBOR_SUCCESS) {
+        printf("QCBOR error: %d\n", uErr);
+        return NULLUsefulBuf;
+    } else {
+        return UsefulBuf_Unconst(EncodedCBOR);
+    }
 }
 
+UsefulBuf encode_aik(void)
+{
+    UsefulBuf ret = NULLUsefulBuf;
+
+    /* First call obtains the size of required output buffer, second call
+     * actually encodes data.
+     *
+     * There is also QCBOREncode_FinishGetSize(), but it internally calls
+     * QCBOREncode_Finish(). We need properly allocated buffer passed to
+     * QCBOREncode_Init() so we would have to call it twice anyway.
+     */
+    ret = _encode_aik(SizeCalculateUsefulBuf);
+
+    ret.ptr = malloc(ret.len);
+    ret = _encode_aik(ret);
+
+    return ret;
+}
 
 /* Release any transient objects that may have been allocated by commands.
  *
