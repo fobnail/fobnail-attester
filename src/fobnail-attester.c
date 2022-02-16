@@ -14,6 +14,14 @@
 #include <fobnail-attester/meta.h>
 #include <fobnail-attester/tpm2-crypto.h>
 
+void coap_ek_fetch_handler(
+    struct coap_resource_t* resource,
+    struct coap_session_t* session,
+    const struct coap_pdu_t* in,
+    const struct coap_string_t* query,
+    struct coap_pdu_t* out
+);
+
 void coap_aik_fetch_handler(
     struct coap_resource_t* resource,
     struct coap_session_t* session,
@@ -154,6 +162,7 @@ int main(int UNUSED argc, char UNUSED *argv[])
     /* register CoAP resource and resource handler */
     printf("Registering CoAP resources.\n");
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "attest", coap_attest_handler);
+    att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "ek", coap_ek_fetch_handler);
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "aik", coap_aik_fetch_handler);
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "metadata", coap_metadata_fetch_handler);
 
