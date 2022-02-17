@@ -144,6 +144,7 @@ coap_context_t* att_coap_new_context(const bool enable_coap_block_mode)
 int main(int UNUSED argc, char UNUSED *argv[])
 {
     int result;
+    struct meta_data meta;
 
     /* signal handling */
     signal(SIGINT, signal_handler);
@@ -163,6 +164,13 @@ int main(int UNUSED argc, char UNUSED *argv[])
     }
 
     /* TODO: sign attestation identity key */
+
+    /* Obtain meta information */
+    memset(&meta, 0, sizeof(struct meta_data));
+    if (get_meta_data(&meta) < 0) {
+        printf("Cannot obtain meta information\n");
+        return -1;
+    }
 
     coap_context_t* coap_context = NULL;
     coap_endpoint_t* coap_endpoint = NULL;
