@@ -67,11 +67,10 @@ static UsefulBuf _encode_aik(UsefulBuf buf)
      *   2^16 + 1. Support for other values is optional.
      */
     /* TODO: is endianness correct? */
-    uint32_t exp_val = keyPublic->publicArea.parameters.rsaDetail.exponent;
-    if (exp_val == 0)
-        exp_val = 0x00010001;
+    uint32_t exponent = keyPublic->publicArea.parameters.rsaDetail.exponent;
+    if (exponent == 0)
+        exponent = 0x00010001;
 
-    UsefulBufC exponent = {&exp_val, sizeof(exp_val)};
     TPM2B_PUBLIC_KEY_RSA *unique = (TPM2B_PUBLIC_KEY_RSA *)
                                    &keyPublic->publicArea.unique;
     UsefulBufC modulus = {&unique->buffer, unique->size};
@@ -86,10 +85,10 @@ static UsefulBuf _encode_aik(UsefulBuf buf)
     /* Proceed to output all the items, letting the internal error
      * tracking do its work */
     QCBOREncode_OpenMap(&ctx);
-        QCBOREncode_AddInt64ToMap(&ctx, "type", 1);     /* Assume RSA */
+        QCBOREncode_AddUInt64ToMap(&ctx, "type", 1);     /* Assume RSA */
         QCBOREncode_OpenMapInMap(&ctx, "key");
             QCBOREncode_AddBytesToMap(&ctx, "n", modulus);
-            QCBOREncode_AddBytesToMap(&ctx, "e", exponent);
+            QCBOREncode_AddUInt64ToMap(&ctx, "e", exponent);
         QCBOREncode_CloseMap(&ctx);
         QCBOREncode_AddBytesToMap(&ctx, "ek_cert", ek_cert /* TODO */);
     QCBOREncode_CloseMap(&ctx);
