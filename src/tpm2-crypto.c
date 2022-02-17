@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>      // isprint, for hexdump
+#include <tss2/tss2_rc.h>
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_mu.h>
 #include <tss2/tss2_tpm2_types.h>
@@ -12,6 +13,7 @@ static ESYS_CONTEXT          *esys_ctx;
 static TSS2_TCTI_CONTEXT     *tcti_ctx;
 static TPM2B_PUBLIC          *keyPublic;
 static TPM2B_PRIVATE         *keyPrivate;
+static UsefulBuf              ek_cert;
 
 void hexdump(const void *memory, size_t length);
 void hexdump(const void *memory, size_t length)
@@ -59,6 +61,97 @@ void hexdump(const void *memory, size_t length)
 	}
 }
 
+static UsefulBuf read_ek_cert(void)
+{
+    UsefulBuf             ret = NULLUsefulBuf;
+    TSS2_RC               tss_ret;
+    ESYS_TR               handle;
+    ESYS_TR               session;
+    TPM2B_NV_PUBLIC      *public;
+    TPM2B_MAX_NV_BUFFER  *data;
+    TPM2B_AUTH            passwd = {.size=4, .buffer={0x01, 0xC0, 0x00, 0x02}};
+    TPM2B_NONCE           nonceCaller = {.size=0x20};
+    TPMT_SYM_DEF          sym_null = {.algorithm=TPM2_ALG_NULL};
+    uint32_t              chunk_size;
+    TPMS_CAPABILITY_DATA *capability_data = NULL;
+
+    Esys_TR_FromTPMPublic(esys_ctx, 0x01C00002, ESYS_TR_NONE, ESYS_TR_NONE,
+                          ESYS_TR_NONE, &handle);
+
+    /* No idea why 'tpmKey' and 'bind' aren't ESYS_TR_RH_NULL, but they must be
+     * ESYS_TR_NONE or this function will fail
+     */
+    tss_ret = Esys_StartAuthSession(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                                    &nonceCaller, TPM2_SE_HMAC, &sym_null,
+                                    TPM2_ALG_SHA256, &session);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        printf("Error: Esys_StartAuthSession() %s\n", Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    /* To read EK cert we must use password made from NV index handle */
+    tss_ret = Esys_TR_SetAuth(esys_ctx, session, &passwd);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        printf("Error: Esys_TR_SetAuth() %s\n", Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    /* Read size of data */
+    tss_ret = Esys_NV_ReadPublic(esys_ctx, handle, ESYS_TR_NONE, ESYS_TR_NONE,
+                                 ESYS_TR_NONE, &public, NULL);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        printf("Error: Esys_NV_ReadPublic() %s\n", Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    /* Allocate UsefulBuf */
+    ret.len = public->nvPublic.dataSize;
+    Esys_Free(public);
+    ret.ptr = malloc(ret.len);
+
+    /* TPMs have a maximum supported data size for NV operations, read it */
+    Esys_GetCapability(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                       TPM2_CAP_TPM_PROPERTIES, TPM2_PT_NV_BUFFER_MAX, 1,
+                       NULL, &capability_data);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        fprintf(stderr, "Error: Esys_GetCapability()\n");
+        free(ret.ptr);
+        ret = NULLUsefulBuf;
+        goto error;
+    }
+    chunk_size = capability_data->data.tpmProperties.tpmProperty[0].value;
+    Esys_Free(capability_data);
+
+    /* Read data in chunks */
+    for (uint32_t offset = 0; offset < ret.len; offset += chunk_size) {
+        uint32_t to_read = ret.len - offset;
+        if (to_read > chunk_size)
+            to_read = chunk_size;
+
+        tss_ret = Esys_NV_Read(esys_ctx, handle, handle, session, ESYS_TR_NONE,
+                               ESYS_TR_NONE, to_read, offset, &data);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            printf("Error: Esys_NV_Read() %s\n", Tss2_RC_Decode(tss_ret));
+            Esys_Free(data);
+            free(ret.ptr);
+            ret = NULLUsefulBuf;
+            goto error;
+        }
+
+        /* New 'data' is created for every Esys_NV_Read() invocation, data must
+         * be copied to final buffer */
+        memcpy((uint8_t *)ret.ptr + offset, data->buffer, data->size);
+        Esys_Free(data);
+    }
+
+    hexdump(ret.ptr, ret.len);
+
+error:
+    Esys_FlushContext(esys_ctx, session);
+    return ret;
+}
+
 static UsefulBuf _encode_aik(UsefulBuf buf)
 {
     /* From TCG Trusted Platform Module Library Part 2: Structures rev 01.59:
@@ -74,9 +167,6 @@ static UsefulBuf _encode_aik(UsefulBuf buf)
     TPM2B_PUBLIC_KEY_RSA *unique = (TPM2B_PUBLIC_KEY_RSA *)
                                    &keyPublic->publicArea.unique;
     UsefulBufC modulus = {&unique->buffer, unique->size};
-    /* TODO */
-    static const uint8_t ek_cert_buf[] = {0,1,2,3,4,5,6,7,8,9};
-    UsefulBufC ek_cert = {&ek_cert_buf, sizeof(ek_cert_buf)};
 
    /* Set up the encoding context with the output buffer */
     QCBOREncodeContext ctx;
@@ -90,7 +180,7 @@ static UsefulBuf _encode_aik(UsefulBuf buf)
             QCBOREncode_AddBytesToMap(&ctx, "n", modulus);
             QCBOREncode_AddUInt64ToMap(&ctx, "e", exponent);
         QCBOREncode_CloseMap(&ctx);
-        QCBOREncode_AddBytesToMap(&ctx, "ek_cert", ek_cert /* TODO */);
+        QCBOREncode_AddBytesToMap(&ctx, "ek_cert", UsefulBuf_Const(ek_cert));
     QCBOREncode_CloseMap(&ctx);
 
     /* Get the pointer and length of the encoded output. If there was
@@ -109,6 +199,10 @@ static UsefulBuf _encode_aik(UsefulBuf buf)
 UsefulBuf encode_aik(void)
 {
     UsefulBuf ret = NULLUsefulBuf;
+    ek_cert = read_ek_cert();
+
+    if (UsefulBuf_IsNULLOrEmpty(ek_cert))
+        fprintf(stderr, "EK certificate can't be read, is this simulated TPM?\n");
 
     /* First call obtains the size of required output buffer, second call
      * actually encodes data.
