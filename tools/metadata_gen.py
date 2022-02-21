@@ -158,3 +158,5 @@ with_sig = {
 }
 
 hexdump(cbor.dumps(with_sig))
+
+print(f'signature len = {len(signature)}')
