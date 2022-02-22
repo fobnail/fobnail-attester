@@ -1,0 +1,14 @@
+name: Build Status
+on:
+  [ pull_request, push, workflow_dispatch ]
+jobs:
+  build:
+    name: Build fobnail-attester
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v2
+
+      - name: Build
+        run: |
+          ./build-docker.sh
