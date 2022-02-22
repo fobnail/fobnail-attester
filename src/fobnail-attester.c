@@ -60,6 +60,41 @@ static void coap_attest_handler(struct coap_resource_t* resource, struct coap_se
 
 }
 
+static void coap_ek_handler(struct coap_resource_t* resource, struct coap_session_t* session,
+                const struct coap_pdu_t* in, const struct coap_string_t* query,
+                struct coap_pdu_t* out)
+{
+    int ret;
+
+    /* Why `query` is null? */
+    printf("Received message.\n");
+
+    UsefulBuf ub = encode_ek();
+    if (UsefulBuf_IsNULLOrEmpty(ub)) {
+        fprintf(stderr, "Error: cannot encode EK into CBOR\n");
+        /* We probably should mention the error in response */
+        quit = -1;
+        return;
+    }
+
+    /* prepare and send response */
+    coap_pdu_set_code(out, COAP_RESPONSE_CODE_CONTENT);
+    ret = coap_add_data_large_response(resource,
+                       session,
+                       in,
+                       out,
+                       query,
+                       COAP_MEDIATYPE_APPLICATION_CBOR,
+                       -1,
+                       0,
+                       ub.len,
+                       ub.ptr,
+                       coap_free_wrapper,
+                       ub.ptr);
+    if (ret == 0)
+        fprintf(stderr, "Err: cannot response.\n");
+
+}
 static void coap_aik_handler(struct coap_resource_t* resource, struct coap_session_t* session,
                 const struct coap_pdu_t* in, const struct coap_string_t* query,
                 struct coap_pdu_t* out)
@@ -190,6 +225,7 @@ int main(int UNUSED argc, char UNUSED *argv[])
     /* register CoAP resource and resource handler */
     printf("Registering CoAP resources.\n");
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "attest", coap_attest_handler);
+    att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "ek", coap_ek_handler);
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "aik", coap_aik_handler);
 
     /* enter main loop */
