@@ -12,16 +12,11 @@ over CHARRA protocol.
 But local (and remote) provisioning must be performed before the attestation
 starts.
 
-## Building
+## Docker
 
-This will build container with necessary dependencies and build the
-application within the container.
-
-```shell
-./build-docker.sh
 ```
-
-The target binary is at `./bin/fobnail-attester`.
+docker build -t fobnail/fobnail-attester .
+```
 
 ##  Install dependencies for building the project.
 

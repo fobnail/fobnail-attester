@@ -4,6 +4,7 @@ FROM ghcr.io/tpm2-software/ubuntu-20.04:latest
 
 RUN apt-get update && \
     apt-get install --no-install-recommends -y \
+    tmux \
     sudo \
     gosu && \
     apt-get clean && \
@@ -57,6 +58,13 @@ ENV TPM2TOOLS_SOCKET_PORT 2321
 RUN echo "builder ALL=NOPASSWD: ALL" > /etc/sudoers.d/builder-nopasswd && \
     chmod 660 /etc/sudoers.d/builder-nopasswd
 
+# ## set environment variables
+# USER "$uid:$gid"
+# ENV HOME /home/"$user"
+# WORKDIR /home/"$user"
+
+COPY ./docker/tpm-reset /usr/local/bin/
+COPY ./docker/compile-tss /usr/local/bin/
 COPY ./docker/entrypoint.sh /
 
 ENTRYPOINT ["/entrypoint.sh"]
