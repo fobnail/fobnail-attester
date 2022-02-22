@@ -3,7 +3,7 @@
 docker build -t fobnail/fobnail-attester .
 
 docker run \
-    --rm -it \
+    --rm \
     -v $PWD:/build \
     -w /build \
     -e USER_ID="$(id -u)" \
