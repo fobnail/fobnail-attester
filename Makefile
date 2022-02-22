@@ -15,7 +15,7 @@ LDPATH =     -L/usr/local/lib/ \
              -L/usr/lib/x86_64-linux-gnu \
              -L./$(QCBORDIR)
 
-LIBS =       coap-3 tss2-esys tss2-sys tss2-mu tss2-tctildr tss2-rc
+LIBS =       coap-3 tss2-esys tss2-sys tss2-mu tss2-tctildr tss2-rc crypto
 STATIC_LIBS = qcbor
 
 # TCTI module to use (default is 'mssim')

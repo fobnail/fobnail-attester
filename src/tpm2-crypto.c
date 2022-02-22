@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>      // isprint, for hexdump
+#include <openssl/evp.h>
 #include <tss2/tss2_rc.h>
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_mu.h>
@@ -13,7 +14,6 @@ static ESYS_CONTEXT          *esys_ctx;
 static TSS2_TCTI_CONTEXT     *tcti_ctx;
 static TPM2B_PUBLIC          *keyPublic;
 static TPM2B_PRIVATE         *keyPrivate;
-static UsefulBuf              ek_cert;
 
 void hexdump(const void *memory, size_t length);
 void hexdump(const void *memory, size_t length)
@@ -152,7 +152,95 @@ error:
     return ret;
 }
 
-static UsefulBuf _encode_aik(UsefulBuf buf)
+UsefulBuf _encode_ek(UsefulBuf buf, UsefulBuf ek_cert)
+{
+   /* Set up the encoding context with the output buffer */
+    QCBOREncodeContext ctx;
+    QCBOREncode_Init(&ctx, buf);
+
+    /* Proceed to output all the items, letting the internal error
+     * tracking do its work */
+    QCBOREncode_OpenMap(&ctx);
+        QCBOREncode_AddBytes(&ctx, UsefulBuf_Const(ek_cert));
+    QCBOREncode_CloseMap(&ctx);
+
+    /* Get the pointer and length of the encoded output. If there was
+     * any encoding error, it will be returned here */
+    UsefulBufC EncodedCBOR;
+    QCBORError uErr;
+    uErr = QCBOREncode_Finish(&ctx, &EncodedCBOR);
+    if(uErr != QCBOR_SUCCESS) {
+        printf("QCBOR error: %d\n", uErr);
+        return NULLUsefulBuf;
+    } else {
+        return UsefulBuf_Unconst(EncodedCBOR);
+    }
+}
+
+UsefulBuf encode_ek(void)
+{
+    UsefulBuf ret;
+    UsefulBuf ek_cert = read_ek_cert();
+
+    if (UsefulBuf_IsNULLOrEmpty(ek_cert))
+        fprintf(stderr, "EK certificate can't be read, is this simulated TPM?\n");
+
+    ret = _encode_ek(SizeCalculateUsefulBuf, ek_cert);
+
+    ret.ptr = malloc(ret.len);
+    ret = _encode_ek(ret, ek_cert);
+
+    return ret;
+}
+
+/* Unmarshaled data uses naturally aligned fields in structures. For
+ * calculating "loaded key name" (i.e. hash of public key) we have to use
+ * marshaled data.
+ */
+void get_loaded_aik_name(uint8_t **out_buf, size_t *out_size)
+{
+    /* Marshaled data will never be bigger than unmarshaled one */
+    uint8_t *buf = malloc(sizeof(*keyPublic));
+    /* size = 0 will still return properly formatted hash without reading from
+     * random places in memory so further functions will work as expected.
+     * SHA256 of empty buffer:
+     * e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+     */
+    size_t size = 0;
+    EVP_MD_CTX *mdctx;
+    const EVP_MD* md = EVP_sha256();
+    TSS2_RC rc;
+
+    /* Add 2 bytes for algorithm ID */
+    *out_buf = malloc(EVP_MD_size(md) + 2);
+
+    if (keyPublic == NULL) {
+        fprintf(stderr,
+                "Error: get_marshalled_aik() called without AIK available\n");
+    } else {
+        rc = Tss2_MU_TPM2B_PUBLIC_Marshal(keyPublic, buf, sizeof(*keyPublic),
+                                          &size);
+        if (rc != TSS2_RC_SUCCESS) {
+            fprintf(stderr, "Err: Marshal() failed: %s\n", Tss2_RC_Decode(rc));
+            size = 0;
+        }
+    }
+
+    mdctx = EVP_MD_CTX_new();
+    EVP_DigestInit(mdctx, md);
+    /* First 2 bytes are the size (big endian!) of rest of the buffer */
+    EVP_DigestUpdate(mdctx, buf + 2, keyPublic->size);
+    /* It also frees mdctx. Skip 2 bytes for algorithm ID */
+    EVP_DigestFinal(mdctx, (*out_buf) + 2, NULL);
+
+    /* TPM2_ALG_SHA256 with correct endianness. TODO: add other if needed */
+    (*out_buf)[0] = 0;
+    (*out_buf)[1] = 0x0B;
+
+    *out_size = EVP_MD_size(md) + 2;
+}
+
+static UsefulBuf _encode_aik(UsefulBuf buf, UsefulBuf lkn)
 {
     /* From TCG Trusted Platform Module Library Part 2: Structures rev 01.59:
      *   A TPM (...) supporting RSA shall support two primes and an exponent of
@@ -180,7 +268,7 @@ static UsefulBuf _encode_aik(UsefulBuf buf)
             QCBOREncode_AddBytesToMap(&ctx, "n", modulus);
             QCBOREncode_AddUInt64ToMap(&ctx, "e", exponent);
         QCBOREncode_CloseMap(&ctx);
-        QCBOREncode_AddBytesToMap(&ctx, "ek_cert", UsefulBuf_Const(ek_cert));
+        QCBOREncode_AddBytesToMap(&ctx, "loaded_key_name", UsefulBuf_Const(lkn));
     QCBOREncode_CloseMap(&ctx);
 
     /* Get the pointer and length of the encoded output. If there was
@@ -199,10 +287,9 @@ static UsefulBuf _encode_aik(UsefulBuf buf)
 UsefulBuf encode_aik(void)
 {
     UsefulBuf ret = NULLUsefulBuf;
-    ek_cert = read_ek_cert();
+    UsefulBuf lkn;
 
-    if (UsefulBuf_IsNULLOrEmpty(ek_cert))
-        fprintf(stderr, "EK certificate can't be read, is this simulated TPM?\n");
+    get_loaded_aik_name((uint8_t **)&lkn.ptr, &lkn.len);
 
     /* First call obtains the size of required output buffer, second call
      * actually encodes data.
@@ -211,10 +298,10 @@ UsefulBuf encode_aik(void)
      * QCBOREncode_Finish(). We need properly allocated buffer passed to
      * QCBOREncode_Init() so we would have to call it twice anyway.
      */
-    ret = _encode_aik(SizeCalculateUsefulBuf);
+    ret = _encode_aik(SizeCalculateUsefulBuf, lkn);
 
     ret.ptr = malloc(ret.len);
-    ret = _encode_aik(ret);
+    ret = _encode_aik(ret, lkn);
 
     return ret;
 }
