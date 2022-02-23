@@ -1,0 +1,2 @@
+authorityKeyIdentifier=issuer
+basicConstraints=CA:FALSE
