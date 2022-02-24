@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
-KNC=keys_and_certs
+SCRIPT_DIR=$(dirname $(readlink -f ${BASH_SOURCE[0]}))
+
+KNC=$SCRIPT_DIR/keys_and_certs
 CA_PRIV=$KNC/ca_priv.pem
 CA_CERT=$KNC/ca_cert.pem
 CA_SRL=$KNC/ca.srl
@@ -8,11 +10,16 @@ EK_PUB=$KNC/ek_pub.pem
 EK_CSR=$KNC/ek.csr
 EK_CERT=$KNC/ek_cert.der
 
+TPM2_LOG_FILE=/tmp/tpm_manufacture.log
+
+echo -n "Starting log file at: " > $TPM2_LOG_FILE
+date >> $TPM2_LOG_FILE
+
 # All tpm2_* commands may print errors when default TPM engine isn't available
 # and other are tried one by one. Send those errors to /dev/null to keep output
 # clean.
 function tpm2 {
-	tpm2_$@ >/dev/null 2>&1
+	tpm2_$@ >> $TPM2_LOG_FILE 2>&1
 	if [[ $? -ne 0 ]]; then
 		echo "'$@' failed, aborting."
 		exit
@@ -28,7 +35,7 @@ while getopts "fkst" arg; do
 		KEEP_FILES=1
 		;;
 	s) echo "Sending TPM2_Startup command"
-		tpm2_startup -c >/dev/null 2>&1
+		tpm2_startup -c >> $TPM2_LOG_FILE 2>&1
 		;;
 	t) TEST=1;;
 	esac
@@ -40,13 +47,13 @@ tpm2 flushcontext -t
 
 # Test if EK certificate is already present
 # Don't use 'tpm2' function, we will handle failure
-tpm2_nvread -C o 0x01C00002 >/dev/null 2>&1
+tpm2_nvread -C o 0x01C00002 >> $TPM2_LOG_FILE 2>&1
 
 if [[ $? -eq 0 && $FORCE -ne 1 ]]; then
 	echo "TPM already has EK certificate, skipping"
 	if [[ $TEST -eq 1 ]]; then
 		# Don't use 'tpm2' function, stdout is piped to openssl
-		tpm2_nvread -C o 0x01C00002 2>/dev/null | \
+		tpm2_nvread -C o 0x01C00002 2>> $TPM2_LOG_FILE | \
 			openssl x509 -text -noout -inform DER
 	fi
 	exit
@@ -89,7 +96,7 @@ echo -e "\n\nDone."
 
 if [[ $TEST -eq 1 ]]; then
 	# Don't use 'tpm2' function, stdout is piped to openssl
-	tpm2_nvread -C o 0x01C00002 2>/dev/null | \
+	tpm2_nvread -C o 0x01C00002 2>> $TPM2_LOG_FILE | \
 		openssl x509 -text -noout -inform DER
 else
 	echo "To test:
