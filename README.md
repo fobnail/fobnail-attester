@@ -12,10 +12,37 @@ over CHARRA protocol.
 But local (and remote) provisioning must be performed before the attestation
 starts.
 
-## Docker
+## Running in docker
+
+* Get `fobnail-sdk` container and install `run-fobnail-sdk.sh` script according
+  to the documentation in the
+  [fobnail-sdk](https://github.com/fobnail/fobnail-sdk) repository.
+
+* Clone [fobnail repository](https://github.com/fobnail/fobnail)
+
+* Build container:
 
 ```
-docker build -t fobnail/fobnail-attester .
+$ docker build -t fobnail/fobnail-attester .
+```
+
+* Build `fobnail-attester`:
+
+```
+$ ./docker.sh build-attester
+```
+
+* Build `fobnail` firmware application:
+
+```
+$ export FOBNAIL_DIR=/path/to/fobnail
+$ ./docker.sh build-fobnail
+```
+
+* Run both applications with TPM simulator:
+
+```
+$ ./docker.sh run-tmux
 ```
 
 ##  Install dependencies for building the project.
