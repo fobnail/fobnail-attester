@@ -50,7 +50,7 @@ tpm2 flushcontext -t
 
 # Test if EK certificate is already present
 # Don't use 'tpm2' function, we will handle failure
-tpm2_nvread -C o 0x01C00002 >> $TPM2_LOG_FILE 2>&1
+tpm2_nvread -C o 0x01C00002 1> /dev/null 2>> $TPM2_LOG_FILE
 
 if [[ $? -eq 0 && $FORCE -ne 1 ]]; then
 	echo "TPM already has EK certificate, skipping"
