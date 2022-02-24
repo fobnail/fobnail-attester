@@ -31,8 +31,16 @@ die
 }
 
 docker_run() {
+  # CI job fails if interactive mode is enabled
+  CI="${CI:-false}"
+  if [ "$CI" = "true" ]; then
+    _tty_opts=""
+  else
+    _tty_opts="-it"
+  fi
+
   docker run \
-      --rm -it \
+      --rm "$_tty_opts" \
       --cap-add=NET_ADMIN \
       -v $PWD:/build \
       -w /build \
