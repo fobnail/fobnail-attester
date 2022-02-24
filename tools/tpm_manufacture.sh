@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 KNC=keys_and_certs
 CA_PRIV=$KNC/ca_priv.pem
