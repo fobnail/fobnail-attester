@@ -56,6 +56,9 @@ EOM
 && echo 'Started TPM Simulator in working directory /tmp.'
 echo
 
+# Write EK cert into the TPM
+./tools/tpm_manufacture.sh -s -t
+
 # Run provided commands
 # Run shell if no commands were provided
 if [ -n "$1" ]; then
