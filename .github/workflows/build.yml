@@ -15,4 +15,5 @@ jobs:
 
       - name: Build
         run: |
-          ./build-docker.sh
+          docker build -t fobnail/fobnail-attester .
+          ./docker.sh build-attester
