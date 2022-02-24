@@ -10,10 +10,12 @@
 #include <tss2/tss2_tctildr.h>
 #include <qcbor/qcbor_encode.h>
 
-static ESYS_CONTEXT          *esys_ctx;
-static TSS2_TCTI_CONTEXT     *tcti_ctx;
-static TPM2B_PUBLIC          *keyPublic;
-static TPM2B_PRIVATE         *keyPrivate;
+static ESYS_CONTEXT         *esys_ctx;
+static TSS2_TCTI_CONTEXT    *tcti_ctx;
+static TPM2B_PUBLIC         *keyPublic;
+
+#define AIK_NV_HANDLE       0x8100F0BA
+#define EK_CERT_NV_HANDLE   0x01C00002
 
 void hexdump(const void *memory, size_t length);
 void hexdump(const void *memory, size_t length)
@@ -75,8 +77,13 @@ static UsefulBuf read_ek_cert(void)
     uint32_t              chunk_size;
     TPMS_CAPABILITY_DATA *capability_data = NULL;
 
-    Esys_TR_FromTPMPublic(esys_ctx, 0x01C00002, ESYS_TR_NONE, ESYS_TR_NONE,
-                          ESYS_TR_NONE, &handle);
+    tss_ret = Esys_TR_FromTPMPublic(esys_ctx, EK_CERT_NV_HANDLE, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, &handle);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        fprintf(stderr, "Error: Esys_TR_FromTPMPublic() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
 
     /* No idea why 'tpmKey' and 'bind' aren't ESYS_TR_RH_NULL, but they must be
      * ESYS_TR_NONE or this function will fail
@@ -86,14 +93,16 @@ static UsefulBuf read_ek_cert(void)
                                     &nonceCaller, TPM2_SE_HMAC, &sym_null,
                                     TPM2_ALG_SHA256, &session);
     if (tss_ret != TSS2_RC_SUCCESS) {
-        printf("Error: Esys_StartAuthSession() %s\n", Tss2_RC_Decode(tss_ret));
+        fprintf(stderr, "Error: Esys_StartAuthSession() %s\n",
+                Tss2_RC_Decode(tss_ret));
         goto error;
     }
 
     /* To read EK cert we must use password made from NV index handle */
     tss_ret = Esys_TR_SetAuth(esys_ctx, session, &passwd);
     if (tss_ret != TSS2_RC_SUCCESS) {
-        printf("Error: Esys_TR_SetAuth() %s\n", Tss2_RC_Decode(tss_ret));
+        fprintf(stderr, "Error: Esys_TR_SetAuth() %s\n",
+                Tss2_RC_Decode(tss_ret));
         goto error;
     }
 
@@ -101,7 +110,8 @@ static UsefulBuf read_ek_cert(void)
     tss_ret = Esys_NV_ReadPublic(esys_ctx, handle, ESYS_TR_NONE, ESYS_TR_NONE,
                                  ESYS_TR_NONE, &public, NULL);
     if (tss_ret != TSS2_RC_SUCCESS) {
-        printf("Error: Esys_NV_ReadPublic() %s\n", Tss2_RC_Decode(tss_ret));
+        fprintf(stderr, "Error: Esys_NV_ReadPublic() %s\n",
+                Tss2_RC_Decode(tss_ret));
         goto error;
     }
 
@@ -112,8 +122,8 @@ static UsefulBuf read_ek_cert(void)
 
     /* TPMs have a maximum supported data size for NV operations, read it */
     Esys_GetCapability(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-                       TPM2_CAP_TPM_PROPERTIES, TPM2_PT_NV_BUFFER_MAX, 1,
-                       NULL, &capability_data);
+                       TPM2_CAP_TPM_PROPERTIES, TPM2_PT_NV_BUFFER_MAX, 1, NULL,
+                       &capability_data);
     if (tss_ret != TSS2_RC_SUCCESS) {
         fprintf(stderr, "Error: Esys_GetCapability()\n");
         free(ret.ptr);
@@ -132,7 +142,8 @@ static UsefulBuf read_ek_cert(void)
         tss_ret = Esys_NV_Read(esys_ctx, handle, handle, session, ESYS_TR_NONE,
                                ESYS_TR_NONE, to_read, offset, &data);
         if (tss_ret != TSS2_RC_SUCCESS) {
-            printf("Error: Esys_NV_Read() %s\n", Tss2_RC_Decode(tss_ret));
+            fprintf(stderr, "Error: Esys_NV_Read() %s\n",
+                    Tss2_RC_Decode(tss_ret));
             Esys_Free(data);
             free(ret.ptr);
             ret = NULLUsefulBuf;
@@ -157,56 +168,10 @@ UsefulBuf encode_ek(void)
     UsefulBuf ek_cert = read_ek_cert();
 
     if (UsefulBuf_IsNULLOrEmpty(ek_cert))
-        fprintf(stderr, "EK certificate can't be read, is this simulated TPM?\n");
+        fprintf(stderr,
+                "EK certificate can't be read, is this simulated TPM?\n");
 
     return ek_cert;
-}
-
-/* Unmarshaled data uses naturally aligned fields in structures. For
- * calculating "loaded key name" (i.e. hash of public key) we have to use
- * marshaled data.
- */
-void get_loaded_aik_name(uint8_t **out_buf, size_t *out_size)
-{
-    /* Marshaled data will never be bigger than unmarshaled one */
-    uint8_t *buf = malloc(sizeof(*keyPublic));
-    /* size = 0 will still return properly formatted hash without reading from
-     * random places in memory so further functions will work as expected.
-     * SHA256 of empty buffer:
-     * e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-     */
-    size_t size = 0;
-    EVP_MD_CTX *mdctx;
-    const EVP_MD* md = EVP_sha256();
-    TSS2_RC rc;
-
-    /* Add 2 bytes for algorithm ID */
-    *out_buf = malloc(EVP_MD_size(md) + 2);
-
-    if (keyPublic == NULL) {
-        fprintf(stderr,
-                "Error: get_marshalled_aik() called without AIK available\n");
-    } else {
-        rc = Tss2_MU_TPM2B_PUBLIC_Marshal(keyPublic, buf, sizeof(*keyPublic),
-                                          &size);
-        if (rc != TSS2_RC_SUCCESS) {
-            fprintf(stderr, "Err: Marshal() failed: %s\n", Tss2_RC_Decode(rc));
-            size = 0;
-        }
-    }
-
-    mdctx = EVP_MD_CTX_new();
-    EVP_DigestInit(mdctx, md);
-    /* First 2 bytes are the size (big endian!) of rest of the buffer */
-    EVP_DigestUpdate(mdctx, buf + 2, keyPublic->size);
-    /* It also frees mdctx. Skip 2 bytes for algorithm ID */
-    EVP_DigestFinal(mdctx, (*out_buf) + 2, NULL);
-
-    /* TPM2_ALG_SHA256 with correct endianness. TODO: add other if needed */
-    (*out_buf)[0] = 0;
-    (*out_buf)[1] = 0x0B;
-
-    *out_size = EVP_MD_size(md) + 2;
 }
 
 static UsefulBuf _encode_aik(UsefulBuf buf, UsefulBuf lkn)
@@ -237,7 +202,8 @@ static UsefulBuf _encode_aik(UsefulBuf buf, UsefulBuf lkn)
             QCBOREncode_AddBytesToMap(&ctx, "n", modulus);
             QCBOREncode_AddUInt64ToMap(&ctx, "e", exponent);
         QCBOREncode_CloseMap(&ctx);
-        QCBOREncode_AddBytesToMap(&ctx, "loaded_key_name", UsefulBuf_Const(lkn));
+        QCBOREncode_AddBytesToMap(&ctx, "loaded_key_name",
+                                  UsefulBuf_Const(lkn));
     QCBOREncode_CloseMap(&ctx);
 
     /* Get the pointer and length of the encoded output. If there was
@@ -246,7 +212,7 @@ static UsefulBuf _encode_aik(UsefulBuf buf, UsefulBuf lkn)
     QCBORError uErr;
     uErr = QCBOREncode_Finish(&ctx, &EncodedCBOR);
     if(uErr != QCBOR_SUCCESS) {
-        printf("QCBOR error: %d\n", uErr);
+        fprintf(stderr, "QCBOR error: %d\n", uErr);
         return NULLUsefulBuf;
     } else {
         return UsefulBuf_Unconst(EncodedCBOR);
@@ -255,10 +221,28 @@ static UsefulBuf _encode_aik(UsefulBuf buf, UsefulBuf lkn)
 
 UsefulBuf encode_aik(void)
 {
-    UsefulBuf ret = NULLUsefulBuf;
-    UsefulBuf lkn;
+    UsefulBuf       ret = NULLUsefulBuf;
+    UsefulBuf       lkn;
+    TPM2B_NAME     *name = NULL;
+    ESYS_TR         handle;
+    TSS2_RC         tss_ret;
 
-    get_loaded_aik_name((uint8_t **)&lkn.ptr, &lkn.len);
+    tss_ret = Esys_TR_FromTPMPublic(esys_ctx, AIK_NV_HANDLE, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, &handle);
+    if (tss_ret != TSS2_RC_SUCCESS){
+        fprintf(stderr, "Error: Esys_TR_FromTPMPublic() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    tss_ret = Esys_TR_GetName(esys_ctx, handle, &name);
+    if (tss_ret != TSS2_RC_SUCCESS){
+        fprintf(stderr, "Error: Esys_TR_GetName() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+    lkn.ptr = name->name;
+    lkn.len = name->size;
 
     /* First call obtains the size of required output buffer, second call
      * actually encodes data.
@@ -271,6 +255,10 @@ UsefulBuf encode_aik(void)
 
     ret.ptr = malloc(ret.len);
     ret = _encode_aik(ret, lkn);
+
+error:
+
+    Esys_Free(name);
 
     return ret;
 }
@@ -391,7 +379,8 @@ TSS2_RC init_tpm_keys(void)
 {
     TSS2_RC                tss_ret = TSS2_RC_SUCCESS;
     ESYS_TR                parent = ESYS_TR_NONE;
-    TPM2B_PUBLIC           inPublic = keyTemplate;
+    ESYS_TR                aik = ESYS_TR_NONE;
+    TPM2B_TEMPLATE         inPublic;
     TPM2B_SENSITIVE_CREATE inSensitive = {
         .sensitive = {
             .userAuth = {
@@ -407,53 +396,114 @@ TSS2_RC init_tpm_keys(void)
     TPML_PCR_SELECTION     creationPCR = { .count = 0, };
     TPM2B_DIGEST           ownerauth = { .size = 0 };
     TPMS_CAPABILITY_DATA  *capabilityData = NULL;
+    TPM2B_PRIVATE         *keyPrivate;
+
+    size_t out_size = 0;
+
+    tss_ret = Tss2_MU_TPMT_PUBLIC_Marshal(&keyTemplate.publicArea,
+                                          inPublic.buffer, sizeof(TPMT_PUBLIC),
+                                          &out_size);
+    if (tss_ret != TSS2_RC_SUCCESS){
+        fprintf(stderr, "Error: Tss2_MU_TPMT_PUBLIC_Marshal() %s\n",
+               Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+    inPublic.size = out_size;
 
     /* Initialize the Esys context */
 
-    if ((tss_ret = Tss2_TctiLdr_Initialize(NULL, &tcti_ctx)) != TSS2_RC_SUCCESS) {
-        fprintf(stderr, "Error: Tss2_TctiLdr_Initialize\n");
+    tss_ret = Tss2_TctiLdr_Initialize(NULL, &tcti_ctx);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        fprintf(stderr, "Error: Tss2_TctiLdr_Initialize %s\n",
+                Tss2_RC_Decode(tss_ret));
         goto error;
     }
 
-    if ((tss_ret = Esys_Initialize(&esys_ctx, tcti_ctx, NULL)) != TSS2_RC_SUCCESS) {
-        fprintf(stderr, "Error: Esys_Initialize()\n");
+    tss_ret = Esys_Initialize(&esys_ctx, tcti_ctx, NULL);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        fprintf(stderr, "Error: Esys_Initialize() %s\n",
+                Tss2_RC_Decode(tss_ret));
         goto error;
     }
 
     tss_ret = Esys_Startup(esys_ctx, TPM2_SU_CLEAR);
     if (tss_ret != TSS2_RC_SUCCESS){
-        printf("Error: Esys_Startup()\n");
+        fprintf(stderr, "Error: Esys_Startup() %s\n", Tss2_RC_Decode(tss_ret));
         goto error;
     }
 
-    if ((tss_ret = Esys_TR_SetAuth(esys_ctx, ESYS_TR_RH_OWNER, &ownerauth)) != TSS2_RC_SUCCESS) {
-        fprintf(stderr, "Error: Esys_TR_SetAuth()\n");
-        goto error;
-    }
-
-    tss_ret = Esys_GetCapability(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-                                 TPM2_CAP_ALGS, 0, TPM2_MAX_CAP_ALGS, NULL, &capabilityData);
+    tss_ret = Esys_TR_SetAuth(esys_ctx, ESYS_TR_RH_OWNER, &ownerauth);
     if (tss_ret != TSS2_RC_SUCCESS) {
-        fprintf(stderr, "Error: Esys_GetCapability()\n");
-        goto error;
-    }
-    Esys_Free(capabilityData);
-
-    tss_ret = Esys_CreatePrimary(esys_ctx, ESYS_TR_RH_ENDORSEMENT, ESYS_TR_PASSWORD,
-                                 ESYS_TR_NONE, ESYS_TR_NONE, &primarySensitive,
-                                 &primaryRsaTemplate, &outsideInfo, &creationPCR,
-                                 &parent, NULL, NULL, NULL, NULL);
-    if (tss_ret != TSS2_RC_SUCCESS) {
-        fprintf(stderr, "Error: Esys_CreatePrimary()\n");
+        fprintf(stderr, "Error: Esys_TR_SetAuth() %s\n",
+                Tss2_RC_Decode(tss_ret));
         goto error;
     }
 
-    tss_ret = Esys_Create(esys_ctx, parent, ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
-                          &inSensitive, &inPublic, &outsideInfo, &creationPCR,
-                          &keyPrivate, &keyPublic, NULL, NULL, NULL);
+    tss_ret = Esys_GetCapability(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                                 ESYS_TR_NONE, TPM2_CAP_HANDLES, AIK_NV_HANDLE,
+                                 1, NULL, &capabilityData);
     if (tss_ret != TSS2_RC_SUCCESS) {
-        fprintf(stderr, "Error: Esys_Create()\n");
+        fprintf(stderr, "Error: Esys_GetCapability() %s\n",
+                Tss2_RC_Decode(tss_ret));
         goto error;
+    }
+
+    if (capabilityData->data.handles.count == 0 ||
+        capabilityData->data.handles.handle[0] != AIK_NV_HANDLE) {
+        printf("AIK not found, generating one now. This may take a while...\n");
+        tss_ret = Esys_CreatePrimary(esys_ctx, ESYS_TR_RH_ENDORSEMENT,
+                                     ESYS_TR_PASSWORD, ESYS_TR_NONE,
+                                     ESYS_TR_NONE, &primarySensitive,
+                                     &primaryRsaTemplate, &outsideInfo,
+                                     &creationPCR, &parent, NULL, NULL, NULL,
+                                     NULL);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            fprintf(stderr, "Error: Esys_CreatePrimary() %s\n",
+            Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+
+        tss_ret = Esys_CreateLoaded(esys_ctx, parent, ESYS_TR_PASSWORD,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, &inSensitive,
+                                    &inPublic, &aik, &keyPrivate, &keyPublic);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            fprintf(stderr, "Error: Esys_CreateLoaded() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+
+        memset(keyPrivate, 0, sizeof(*keyPrivate));
+        Esys_Free(keyPrivate);
+        keyPrivate = NULL;
+
+        tss_ret = Esys_EvictControl(esys_ctx, ESYS_TR_RH_OWNER, aik,
+                                    ESYS_TR_PASSWORD, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, AIK_NV_HANDLE, &aik);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            fprintf(stderr, "Error: Esys_EvictControl() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+    } else {
+        TPM2B_NAME *name, *qname;
+
+        tss_ret = Esys_TR_FromTPMPublic(esys_ctx, AIK_NV_HANDLE, ESYS_TR_NONE,
+                                        ESYS_TR_NONE, ESYS_TR_NONE, &aik);
+        if (tss_ret != TSS2_RC_SUCCESS){
+            fprintf(stderr, "Error: Esys_TR_FromTPMPublic() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+
+        tss_ret = Esys_ReadPublic(esys_ctx, aik, ESYS_TR_NONE, ESYS_TR_NONE,
+                                  ESYS_TR_NONE, &keyPublic, &name, &qname);
+        Esys_Free(name);
+        Esys_Free(qname);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            fprintf(stderr, "Error: Esys_ReadPublic() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
     }
 
     hexdump(keyPublic, sizeof(*keyPublic));
@@ -461,6 +511,8 @@ TSS2_RC init_tpm_keys(void)
     return TSS2_RC_SUCCESS;
 
 error:
+    Esys_Free(capabilityData);
+
     if (esys_ctx != NULL) {
         flush_tpm_contexts(esys_ctx);
         Esys_Finalize(&esys_ctx);
@@ -475,9 +527,6 @@ error:
 /* Should not be called if init_tpm_keys() failed */
 void tpm_cleanup(void)
 {
-    memset(keyPrivate, 0, sizeof(*keyPrivate));
-    Esys_Free(keyPrivate);
-    keyPrivate = NULL;
     memset(keyPublic, 0, sizeof(*keyPublic));
     Esys_Free(keyPublic);
     keyPublic = NULL;
