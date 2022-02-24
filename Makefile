@@ -35,7 +35,7 @@ SOURCES = $(shell find $(SRCDIR) -name '*.c')
 INCLUDE = -I$(INCDIR)
 
 OBJECTS =   $(addsuffix .o, $(OBJDIR)/fobnail-attester)
-OBJECTS +=  $(addsuffix .o, $(OBJDIR)/tpm2-crypto $(OBJDIR)/meta_data)
+OBJECTS +=  $(addsuffix .o, $(OBJDIR)/tpm2-crypto $(OBJDIR)/meta_data $(OBJDIR)/dmi_decode)
 
 TARGETS = $(addprefix $(BINDIR)/, fobnail-attester)
 

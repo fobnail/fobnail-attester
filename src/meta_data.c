@@ -154,11 +154,15 @@ static int get_mac_addr(uint8_t *mac)
 
 int get_meta_data(struct meta_data *meta)
 {
+    meta->header_version = META_H_VERSION;
+
     if (get_mac_addr(meta->mac) < 0)
         return -1;
 
     printf("MAC: %2X:%2X:%2X:%2X:%2X:%2X\n",
             meta->mac[0], meta->mac[1], meta->mac[2], meta->mac[3], meta->mac[4], meta->mac[5]);
+
+    get_dmi_system_info(meta);
 
     return 0;
 }
