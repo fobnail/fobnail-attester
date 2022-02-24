@@ -71,7 +71,7 @@ static void coap_ek_handler(struct coap_resource_t* resource, struct coap_sessio
 
     UsefulBuf ub = encode_ek();
     if (UsefulBuf_IsNULLOrEmpty(ub)) {
-        fprintf(stderr, "Error: cannot encode EK into CBOR\n");
+        fprintf(stderr, "Error: cannot obtain EK\n");
         /* We probably should mention the error in response */
         quit = -1;
         return;
@@ -84,7 +84,7 @@ static void coap_ek_handler(struct coap_resource_t* resource, struct coap_sessio
                        in,
                        out,
                        query,
-                       COAP_MEDIATYPE_APPLICATION_CBOR,
+                       COAP_MEDIATYPE_APPLICATION_OCTET_STREAM,
                        -1,
                        0,
                        ub.len,

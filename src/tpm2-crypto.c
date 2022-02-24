@@ -152,45 +152,14 @@ error:
     return ret;
 }
 
-UsefulBuf _encode_ek(UsefulBuf buf, UsefulBuf ek_cert)
-{
-   /* Set up the encoding context with the output buffer */
-    QCBOREncodeContext ctx;
-    QCBOREncode_Init(&ctx, buf);
-
-    /* Proceed to output all the items, letting the internal error
-     * tracking do its work */
-    QCBOREncode_OpenMap(&ctx);
-        QCBOREncode_AddBytes(&ctx, UsefulBuf_Const(ek_cert));
-    QCBOREncode_CloseMap(&ctx);
-
-    /* Get the pointer and length of the encoded output. If there was
-     * any encoding error, it will be returned here */
-    UsefulBufC EncodedCBOR;
-    QCBORError uErr;
-    uErr = QCBOREncode_Finish(&ctx, &EncodedCBOR);
-    if(uErr != QCBOR_SUCCESS) {
-        printf("QCBOR error: %d\n", uErr);
-        return NULLUsefulBuf;
-    } else {
-        return UsefulBuf_Unconst(EncodedCBOR);
-    }
-}
-
 UsefulBuf encode_ek(void)
 {
-    UsefulBuf ret;
     UsefulBuf ek_cert = read_ek_cert();
 
     if (UsefulBuf_IsNULLOrEmpty(ek_cert))
         fprintf(stderr, "EK certificate can't be read, is this simulated TPM?\n");
 
-    ret = _encode_ek(SizeCalculateUsefulBuf, ek_cert);
-
-    ret.ptr = malloc(ret.len);
-    ret = _encode_ek(ret, ek_cert);
-
-    return ret;
+    return ek_cert;
 }
 
 /* Unmarshaled data uses naturally aligned fields in structures. For
