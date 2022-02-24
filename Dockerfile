@@ -27,7 +27,7 @@ RUN git reset --hard \
     && rm -rf /tmp/tpm2-tss
 
 ## TPM2 tools
-RUN git clone --depth=1 -b '5.0' \
+RUN git clone --depth=1 -b '5.2' \
 	'https://github.com/tpm2-software/tpm2-tools.git' /tmp/tpm2-tools
 WORKDIR /tmp/tpm2-tools
 RUN ./bootstrap \
