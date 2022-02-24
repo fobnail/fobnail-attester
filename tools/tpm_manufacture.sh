@@ -9,6 +9,9 @@ CA_SRL=$KNC/ca.srl
 EK_PUB=$KNC/ek_pub.pem
 EK_CSR=$KNC/ek.csr
 EK_CERT=$KNC/ek_cert.der
+CA_CONFIG=$SCRIPT_DIR/ca.config
+EK_CONFIG=$SCRIPT_DIR/ek.config
+
 
 TPM2_LOG_FILE=/tmp/tpm_manufacture.log
 
@@ -67,10 +70,10 @@ tpm2 createprimary -C e --format=pem --output=$EK_PUB
 # Generate self-signed CA certificate
 # TODO: add option to provide CA key instead of generating new one
 openssl req -newkey rsa:2048 -nodes -keyout $CA_PRIV -x509 -days 365 \
-        -out $CA_CERT -config ca.config
+        -out $CA_CERT -config $CA_CONFIG
 
 # Create and sign EK certificate
-openssl req -new -key $CA_PRIV -out $EK_CSR -config ek.config
+openssl req -new -key $CA_PRIV -out $EK_CSR -config $EK_CONFIG
 openssl x509 -req -in $EK_CSR -CA $CA_CERT -CAkey $CA_PRIV -CAserial $CA_SRL \
         -CAcreateserial -out $EK_CERT -outform der
 
