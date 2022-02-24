@@ -39,7 +39,7 @@ static void coap_attest_handler(struct coap_resource_t* resource, struct coap_se
     char *res_buf = "Response from server.\n";
     size_t res_buf_len = strlen(res_buf);
 
-    printf("Received message.\n");
+    printf("Received message: %s\n", coap_get_uri_path(in)->s);
 
     /* prepare and send response */
     coap_pdu_set_code(out, COAP_RESPONSE_CODE_CONTENT);
@@ -66,8 +66,7 @@ static void coap_ek_handler(struct coap_resource_t* resource, struct coap_sessio
 {
     int ret;
 
-    /* Why `query` is null? */
-    printf("Received message.\n");
+    printf("Received message: %s\n", coap_get_uri_path(in)->s);
 
     UsefulBuf ub = encode_ek();
     if (UsefulBuf_IsNULLOrEmpty(ub)) {
@@ -101,8 +100,7 @@ static void coap_aik_handler(struct coap_resource_t* resource, struct coap_sessi
 {
     int ret;
 
-    /* Why `query` is null? */
-    printf("Received message.\n");
+    printf("Received message: %s\n", coap_get_uri_path(in)->s);
 
     UsefulBuf ub = encode_aik();
     if (UsefulBuf_IsNULLOrEmpty(ub)) {
