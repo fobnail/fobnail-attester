@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include <tss2/tss2_rc.h>
 #include <qcbor/UsefulBuf.h>
+#include <qcbor/qcbor_encode.h>
 
 #include <fobnail-attester/meta.h>
 #include <fobnail-attester/tpm2-crypto.h>
@@ -129,6 +130,105 @@ static void coap_aik_handler(struct coap_resource_t* resource, struct coap_sessi
 
 }
 
+static inline void free_null_ptr(void *ptr)
+{
+    if (ptr != NULL) {
+        free(ptr);
+        ptr = NULL;
+    }
+}
+
+UsefulBuf _encode_metadata(UsefulBuf Buffer, struct meta_data *meta)
+{
+    QCBOREncodeContext ctx;
+    QCBOREncode_Init(&ctx, Buffer);
+
+    QCBOREncode_OpenMap(&ctx);
+        QCBOREncode_AddUInt64ToMap(&ctx, "version", meta->header_version);
+        UsefulBufC mac = { meta->mac, sizeof(meta->mac) };
+        QCBOREncode_AddBytesToMap(&ctx, "mac", mac);
+
+        QCBOREncode_CloseArray(&ctx);
+        QCBOREncode_AddSZStringToMap(&ctx, "manufacturer",
+                                     meta->manufacturer ? meta->manufacturer : "");
+        QCBOREncode_AddSZStringToMap(&ctx, "product_name",
+                                     meta->product_name ? meta->product_name : "");
+        QCBOREncode_AddSZStringToMap(&ctx, "serial_number",
+                                     meta->serial_number ? meta->serial_number : "");
+
+    QCBOREncode_CloseMap(&ctx);
+
+    UsefulBufC EncodedCBOR;
+    QCBORError uErr;
+    uErr = QCBOREncode_Finish(&ctx, &EncodedCBOR);
+
+    if(uErr != QCBOR_SUCCESS) {
+        fprintf(stderr, "QCBOR error: %d\n", uErr);
+        return NULLUsefulBuf;
+    } else {
+        return UsefulBuf_Unconst(EncodedCBOR);
+    }
+}
+
+UsefulBuf encode_meta(struct meta_data *meta)
+{
+    UsefulBuf ret = NULLUsefulBuf;
+
+    //TODO: Error handling?
+    ret = _encode_metadata(SizeCalculateUsefulBuf, meta);
+    ret.ptr = malloc(ret.len);
+    ret = _encode_metadata(ret, meta);
+
+    return ret;
+}
+
+static void coap_metadata_handler(struct coap_resource_t* resource, struct coap_session_t* session,
+                                  const struct coap_pdu_t* in, const struct coap_string_t* query,
+                                  struct coap_pdu_t* out)
+{
+    int ret;
+    UsefulBuf ub;
+    struct meta_data meta;
+    printf("Received message: %s\n", coap_get_uri_path(in)->s);
+
+    /* Obtain meta information */
+    memset(&meta, 0, sizeof(struct meta_data));
+    if (get_meta_data(&meta) < 0) {
+        fprintf(stderr, "Cannot obtain full meta information\n");
+        quit = -1;
+        return;
+    }
+
+    ub = encode_meta(&meta);
+
+    free_null_ptr(meta.manufacturer);
+    free_null_ptr(meta.product_name);
+    free_null_ptr(meta.serial_number);
+
+    if (UsefulBuf_IsNULLOrEmpty(ub)) {
+        fprintf(stderr, "Error: cannot encode meta information into CBOR\n");
+        quit = -1;
+        return;
+    }
+
+    /* prepare and send response */
+    coap_pdu_set_code(out, COAP_RESPONSE_CODE_CONTENT);
+    ret = coap_add_data_large_response(resource,
+                         session,
+                         in,
+                         out,
+                         query,
+                         COAP_MEDIATYPE_APPLICATION_CBOR,
+                         -1,
+                         0,
+                         ub.len,
+                         ub.ptr,
+                         coap_free_wrapper,
+                         ub.ptr);
+    if (ret == 0)
+        fprintf(stderr, "Err: cannot response.\n");
+}
+
 void att_coap_add_resource(struct coap_context_t* coap_context,
                coap_request_t method, const char* resource_name,
                coap_method_handler_t handler)
@@ -177,7 +277,6 @@ coap_context_t* att_coap_new_context(const bool enable_coap_block_mode)
 int main(int UNUSED argc, char UNUSED *argv[])
 {
     int result;
-    struct meta_data meta;
 
     /* signal handling */
     signal(SIGINT, signal_handler);
@@ -197,13 +296,6 @@ int main(int UNUSED argc, char UNUSED *argv[])
     }
 
     /* TODO: sign attestation identity key */
-
-    /* Obtain meta information */
-    memset(&meta, 0, sizeof(struct meta_data));
-    if (get_meta_data(&meta) < 0) {
-        printf("Cannot obtain meta information\n");
-        return -1;
-    }
 
     coap_context_t* coap_context = NULL;
     coap_endpoint_t* coap_endpoint = NULL;
@@ -225,6 +317,7 @@ int main(int UNUSED argc, char UNUSED *argv[])
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "attest", coap_attest_handler);
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "ek", coap_ek_handler);
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "aik", coap_aik_handler);
+    att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "metadata", coap_metadata_handler);
 
     /* enter main loop */
     printf("Entering main loop.\n");

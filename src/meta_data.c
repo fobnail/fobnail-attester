@@ -62,7 +62,8 @@ static uint32_t get_bdf_from_path(const char *link_path)
     bdf[bdf_str_len] = '\0';
 
     colon1 = strchr(bdf, ':');
-    colon2 = strchr(colon1 + 1, ':');
+    colon1 += 1;
+    colon2 = strchr(colon1, ':');
     null = colon2;
     colon2 += 1;
     *null = '\0';
@@ -162,8 +163,6 @@ int get_meta_data(struct meta_data *meta)
     printf("MAC: %2X:%2X:%2X:%2X:%2X:%2X\n",
             meta->mac[0], meta->mac[1], meta->mac[2], meta->mac[3], meta->mac[4], meta->mac[5]);
 
-    get_dmi_system_info(meta);
-
-    return 0;
+    return get_dmi_system_info(meta);
 }
 
