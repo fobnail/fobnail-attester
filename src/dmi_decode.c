@@ -145,6 +145,7 @@ const char *dmi_string(const struct dmi_header *dm, uint8_t s)
 static int att_smbios3_decode(uint8_t *buf, const char *devmem, struct meta_data *meta)
 {
     size_t len;
+    int ret = 0;
     uint8_t *dmi_buf = NULL;
 
     /* Don't let checksum run beyond the buffer */
@@ -152,7 +153,7 @@ static int att_smbios3_decode(uint8_t *buf, const char *devmem, struct meta_data
         fprintf(stderr,
             "Entry point length too large (%u bytes, expected %u).\n",
             (unsigned int)buf[0x06], 0x18U);
-        return 0;
+        return -1;
     }
 
     /* Some SMBIOS magic constants. I guess this is from specification. */
@@ -172,15 +173,32 @@ static int att_smbios3_decode(uint8_t *buf, const char *devmem, struct meta_data
             h.data = data;
 
             if (h.type == 1) {
+                const char *sn, *pn, *mfr;
                 uint8_t *sys_data = h.data;
                 if (h.length < 0x08)
                     break;
+                mfr = dmi_string(&h, sys_data[0x04]);
+                pn  = dmi_string(&h, sys_data[0x05]);
+                sn  = dmi_string(&h, sys_data[0x07]);
 
-                printf("Manufacturer >%s<\n", dmi_string(&h, sys_data[0x04]));
-                printf("Product Name >%s<\n", dmi_string(&h, sys_data[0x05]));
-                printf("Serial Number >%s<\n", dmi_string(&h, sys_data[0x07]));
+                meta->manufacturer   = malloc(strlen(mfr) + 1);
+                meta->product_name   = malloc(strlen(pn) + 1);
+                meta->serial_number  = malloc(strlen(sn) + 1);
+                if (!meta->manufacturer || !meta->product_name || !meta->serial_number) {
+                    fprintf(stderr, "Cannot allocate memory.\n");
+                    ret = -1;
+                    break;
+                }
+                strcpy(meta->manufacturer, mfr);
+                strcpy(meta->product_name, pn);
+                strcpy(meta->serial_number, sn);
+
+                printf("Manufacturer >%s<\n", meta->manufacturer);
+                printf("Product Name >%s<\n", meta->product_name);
+                printf("Serial Number >%s<\n", meta->serial_number);
                 break;
             }
+
             next = data + h.length;
             while ((unsigned long)(next - dmi_buf + 1) < len && (next[0] != 0 || next[1] != 0))
                 next++;
@@ -196,7 +214,15 @@ static int att_smbios3_decode(uint8_t *buf, const char *devmem, struct meta_data
         free(dmi_buf);
     }
 
-    return 1;
+    return ret;
+}
+
+static inline void free_null_ptr(void *ptr)
+{
+    if (ptr != NULL) {
+        free(ptr);
+        ptr = NULL;
+    }
 }
 
 int get_dmi_system_info(struct meta_data *meta)
@@ -207,7 +233,11 @@ int get_dmi_system_info(struct meta_data *meta)
     size = 0x20;
     if ((buf = read_file(0, &size, SYS_ENTRY_FILE)) != NULL) {
         if (size >= 24 && memcmp(buf, "_SM3_", 5) == 0)
-            att_smbios3_decode(buf, SYS_TABLE_FILE, meta);
+            if (att_smbios3_decode(buf, SYS_TABLE_FILE, meta) < 0) {
+                free_null_ptr(meta->manufacturer);
+                free_null_ptr(meta->product_name);
+                free_null_ptr(meta->serial_number);
+            }
     } else {
         fprintf(stderr, "Not supported yet. Currently only SMBIOS_3 is supported.\n");
         return -1;

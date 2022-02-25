@@ -3,13 +3,6 @@
 
 #include <stdint.h>
 
-/* Structure for serial number */
-#define SN_SIZE 64
-struct serial_number {
-    uint8_t size;
-    uint8_t number[SN_SIZE];
-};
-
 /* Enum for hash id */
 enum {
     SHA1,
@@ -31,7 +24,9 @@ struct EKcert_hash {
 struct meta_data {
     uint8_t              header_version;
     uint8_t              mac[6];         /* MAC address */
-    struct serial_number sn;       /* Serial number */
+    char           *serial_number;       /* Serial number */
+    char           *manufacturer;
+    char           *product_name;
     struct EKcert_hash  EK_hash;  /* EKcert hash */
 } __attribute__((packed));
 
