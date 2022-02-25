@@ -9,12 +9,14 @@
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_tctildr.h>
 #include <qcbor/qcbor_encode.h>
+#include <qcbor/qcbor_spiffy_decode.h>
 
 static ESYS_CONTEXT         *esys_ctx;
 static TSS2_TCTI_CONTEXT    *tcti_ctx;
 static TPM2B_PUBLIC         *keyPublic;
 
 #define AIK_NV_HANDLE       0x8100F0BA
+#define EK_NV_HANDLE        0x8100F0BE
 #define EK_CERT_NV_HANDLE   0x01C00002
 
 void hexdump(const void *memory, size_t length);
@@ -263,6 +265,85 @@ error:
     return ret;
 }
 
+UsefulBuf do_challenge(UsefulBuf in)
+{
+    UsefulBuf               ret = NULLUsefulBuf;
+    UsefulBufC              id_object, enc_secret;
+    QCBORError              uErr;
+    QCBORDecodeContext      ctx;
+    ESYS_TR                 aik_handle, ek_handle;
+    TPM2B_DIGEST           *cert_info = NULL;
+    TPM2B_ID_OBJECT         tpm_id_object;
+    TPM2B_ENCRYPTED_SECRET  tpm_enc_secret;
+    TSS2_RC                 tss_ret;
+
+    /* Let QCBORDecode internal error tracking do its work. */
+    QCBORDecode_Init(&ctx, UsefulBuf_Const(in), QCBOR_DECODE_MODE_NORMAL);
+    QCBORDecode_EnterMap(&ctx, NULL);
+        QCBORDecode_GetByteStringInMapSZ(&ctx, "idObject", &id_object);
+        QCBORDecode_GetByteStringInMapSZ(&ctx, "encSecret", &enc_secret);
+    QCBORDecode_ExitMap(&ctx);
+
+    /* Catch further decoding error here */
+    uErr = QCBORDecode_Finish(&ctx);
+    if (uErr != QCBOR_SUCCESS) {
+        fprintf(stderr, "QCBOR error: %d\n", uErr);
+        return ret;
+    }
+
+    tss_ret = Esys_TR_FromTPMPublic(esys_ctx, AIK_NV_HANDLE, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, &aik_handle);
+    if (tss_ret != TSS2_RC_SUCCESS){
+        fprintf(stderr, "Error: Esys_TR_FromTPMPublic() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    tss_ret = Esys_TR_FromTPMPublic(esys_ctx, EK_NV_HANDLE, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, &ek_handle);
+    if (tss_ret != TSS2_RC_SUCCESS){
+        fprintf(stderr, "Error: Esys_TR_FromTPMPublic() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    tss_ret = Tss2_MU_TPM2B_ID_OBJECT_Unmarshal(id_object.ptr, id_object.len,
+                                                NULL, &tpm_id_object);
+    if (tss_ret != TSS2_RC_SUCCESS){
+        fprintf(stderr, "Error: Tss2_MU_TPM2B_ID_OBJECT_Unmarshal() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    tss_ret = Tss2_MU_TPM2B_ENCRYPTED_SECRET_Unmarshal(enc_secret.ptr,
+                                                       enc_secret.len, NULL,
+                                                       &tpm_enc_secret);
+    if (tss_ret != TSS2_RC_SUCCESS){
+        fprintf(stderr, "Error: Tss2_MU_TPM2B_ENCRYPTED_SECRET_Unmarshal() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    tss_ret = Esys_ActivateCredential(esys_ctx, aik_handle, ek_handle,
+                                      /* activateHandleSession1 */ ESYS_TR_NONE,
+                                      /* keyHandleSession2 */ ESYS_TR_NONE,
+                                      ESYS_TR_NONE, &tpm_id_object,
+                                      &tpm_enc_secret, &cert_info);
+    if (tss_ret != TSS2_RC_SUCCESS){
+        fprintf(stderr, "Error: Esys_ActivateCredential() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    ret.ptr = malloc(cert_info->size);
+    ret.len = cert_info->size;
+    memcpy(ret.ptr, cert_info->buffer, ret.len);
+
+error:
+    Esys_Free(cert_info);
+    return ret;
+}
+
 /* Release any transient objects that may have been allocated by commands.
  *
  * Note: this also unloads EK, which (along with AIK) will be needed for further
@@ -479,6 +560,15 @@ TSS2_RC init_tpm_keys(void)
         tss_ret = Esys_EvictControl(esys_ctx, ESYS_TR_RH_OWNER, aik,
                                     ESYS_TR_PASSWORD, ESYS_TR_NONE,
                                     ESYS_TR_NONE, AIK_NV_HANDLE, &aik);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            fprintf(stderr, "Error: Esys_EvictControl() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+
+        tss_ret = Esys_EvictControl(esys_ctx, ESYS_TR_RH_OWNER, parent,
+                                    ESYS_TR_PASSWORD, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, EK_NV_HANDLE, &parent);
         if (tss_ret != TSS2_RC_SUCCESS) {
             fprintf(stderr, "Error: Esys_EvictControl() %s\n",
                     Tss2_RC_Decode(tss_ret));
