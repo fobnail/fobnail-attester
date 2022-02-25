@@ -9,7 +9,8 @@
 #include <coap3/coap.h>
 #include <signal.h>
 #include <stdbool.h>
-#include <tss2/tss2_tpm2_types.h>
+#include <tss2/tss2_rc.h>
+#include <qcbor/UsefulBuf.h>
 
 #include <fobnail-attester/meta.h>
 #include <fobnail-attester/tpm2-crypto.h>
@@ -23,6 +24,13 @@ static void signal_handler(int signum)
     quit = signum;
 }
 
+static void coap_free_wrapper(coap_session_t *session, void *app_ptr)
+{
+    (void)session; /* unused */
+    if (app_ptr != NULL)
+        free(app_ptr);
+}
+
 static void coap_attest_handler(struct coap_resource_t* resource, struct coap_session_t* session,
                 const struct coap_pdu_t* in, const struct coap_string_t* query,
                 struct coap_pdu_t* out)
@@ -31,7 +39,7 @@ static void coap_attest_handler(struct coap_resource_t* resource, struct coap_se
     char *res_buf = "Response from server.\n";
     size_t res_buf_len = strlen(res_buf);
 
-    printf("Received message.\n");
+    printf("Received message: %s\n", coap_get_uri_path(in)->s);
 
     /* prepare and send response */
     coap_pdu_set_code(out, COAP_RESPONSE_CODE_CONTENT);
@@ -47,6 +55,75 @@ static void coap_attest_handler(struct coap_resource_t* resource, struct coap_se
                        (const uint8_t *)res_buf,
                        NULL,
                        res_buf);
+    if (ret == 0)
+        fprintf(stderr, "Err: cannot response.\n");
+
+}
+
+static void coap_ek_handler(struct coap_resource_t* resource, struct coap_session_t* session,
+                const struct coap_pdu_t* in, const struct coap_string_t* query,
+                struct coap_pdu_t* out)
+{
+    int ret;
+
+    printf("Received message: %s\n", coap_get_uri_path(in)->s);
+
+    UsefulBuf ub = encode_ek();
+    if (UsefulBuf_IsNULLOrEmpty(ub)) {
+        fprintf(stderr, "Error: cannot obtain EK\n");
+        /* We probably should mention the error in response */
+        quit = -1;
+        return;
+    }
+
+    /* prepare and send response */
+    coap_pdu_set_code(out, COAP_RESPONSE_CODE_CONTENT);
+    ret = coap_add_data_large_response(resource,
+                       session,
+                       in,
+                       out,
+                       query,
+                       COAP_MEDIATYPE_APPLICATION_OCTET_STREAM,
+                       -1,
+                       0,
+                       ub.len,
+                       ub.ptr,
+                       coap_free_wrapper,
+                       ub.ptr);
+    if (ret == 0)
+        fprintf(stderr, "Err: cannot response.\n");
+
+}
+static void coap_aik_handler(struct coap_resource_t* resource, struct coap_session_t* session,
+                const struct coap_pdu_t* in, const struct coap_string_t* query,
+                struct coap_pdu_t* out)
+{
+    int ret;
+
+    printf("Received message: %s\n", coap_get_uri_path(in)->s);
+
+    UsefulBuf ub = encode_aik();
+    if (UsefulBuf_IsNULLOrEmpty(ub)) {
+        fprintf(stderr, "Error: cannot encode AIK into CBOR\n");
+        /* We probably should mention the error in response */
+        quit = -1;
+        return;
+    }
+
+    /* prepare and send response */
+    coap_pdu_set_code(out, COAP_RESPONSE_CODE_CONTENT);
+    ret = coap_add_data_large_response(resource,
+                       session,
+                       in,
+                       out,
+                       query,
+                       COAP_MEDIATYPE_APPLICATION_CBOR,
+                       -1,
+                       0,
+                       ub.len,
+                       ub.ptr,
+                       coap_free_wrapper,
+                       ub.ptr);
     if (ret == 0)
         fprintf(stderr, "Err: cannot response.\n");
 
@@ -114,7 +191,7 @@ int main(int UNUSED argc, char UNUSED *argv[])
     }*/
 
     /* Generate attestation identity key */
-    if (att_generate_aik_key() != TSS2_RC_SUCCESS) {
+    if (init_tpm_keys() != TSS2_RC_SUCCESS) {
         printf("Cannot generate AIK\n");
         return EXIT_FAILURE;
     }
@@ -146,6 +223,8 @@ int main(int UNUSED argc, char UNUSED *argv[])
     /* register CoAP resource and resource handler */
     printf("Registering CoAP resources.\n");
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "attest", coap_attest_handler);
+    att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "ek", coap_ek_handler);
+    att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "aik", coap_aik_handler);
 
     /* enter main loop */
     printf("Entering main loop.\n");
@@ -171,6 +250,8 @@ finish:
     coap_context = NULL;
 
     coap_cleanup();
+
+    tpm_cleanup();
 
     return result;
 }

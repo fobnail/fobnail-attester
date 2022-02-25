@@ -1,4 +1,4 @@
 bin/fobnail-attester
 obj/*.o
 tags
-
+tools/keys_and_certs/*

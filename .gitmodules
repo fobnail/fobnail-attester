@@ -1,0 +1,3 @@
+[submodule "3rdparty/QCBOR"]
+	path = 3rdparty/QCBOR
+	url = https://github.com/laurencelundblade/QCBOR.git
