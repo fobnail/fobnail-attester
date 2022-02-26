@@ -272,10 +272,13 @@ UsefulBuf do_challenge(UsefulBuf in)
     QCBORError              uErr;
     QCBORDecodeContext      ctx;
     ESYS_TR                 aik_handle, ek_handle;
+    ESYS_TR                 aik_session = TPM2_RH_NULL, ek_session = TPM2_RH_NULL;
     TPM2B_DIGEST           *cert_info = NULL;
     TPM2B_ID_OBJECT         tpm_id_object;
     TPM2B_ENCRYPTED_SECRET  tpm_enc_secret;
     TSS2_RC                 tss_ret;
+    TPM2B_NONCE             nonceCaller = {.size=0x20};
+    TPMT_SYM_DEF            sym_null = {.algorithm=TPM2_ALG_NULL};
 
     /* Let QCBORDecode internal error tracking do its work. */
     QCBORDecode_Init(&ctx, UsefulBuf_Const(in), QCBOR_DECODE_MODE_NORMAL);
@@ -324,9 +327,34 @@ UsefulBuf do_challenge(UsefulBuf in)
         goto error;
     }
 
+    tss_ret = Esys_StartAuthSession(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                                    &nonceCaller, TPM2_SE_POLICY, &sym_null,
+                                    TPM2_ALG_SHA256, &ek_session);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        printf("Error: Esys_StartAuthSession() %s\n", Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    tss_ret = Esys_PolicySecret(esys_ctx, ESYS_TR_RH_ENDORSEMENT, ek_session,
+                                ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+                                NULL, NULL, NULL, 0, NULL, NULL);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        printf("Error: Esys_PolicySecret() %s\n", Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    tss_ret = Esys_StartAuthSession(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                                    &nonceCaller, TPM2_SE_HMAC, &sym_null,
+                                    TPM2_ALG_SHA256, &aik_session);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        printf("Error: Esys_StartAuthSession() %s\n", Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
     tss_ret = Esys_ActivateCredential(esys_ctx, aik_handle, ek_handle,
-                                      /* activateHandleSession1 */ ESYS_TR_NONE,
-                                      /* keyHandleSession2 */ ESYS_TR_NONE,
+                                      aik_session, ek_session,
                                       ESYS_TR_NONE, &tpm_id_object,
                                       &tpm_enc_secret, &cert_info);
     if (tss_ret != TSS2_RC_SUCCESS){
@@ -340,6 +368,11 @@ UsefulBuf do_challenge(UsefulBuf in)
     memcpy(ret.ptr, cert_info->buffer, ret.len);
 
 error:
+    if(ek_session != TPM2_RH_NULL)
+        Esys_FlushContext(esys_ctx, ek_session);
+    if(aik_session != TPM2_RH_NULL)
+        Esys_FlushContext(esys_ctx, aik_session);
+
     Esys_Free(cert_info);
     return ret;
 }
