@@ -65,6 +65,42 @@ void hexdump(const void *memory, size_t length)
 	}
 }
 
+/* Release any transient objects that may have been allocated by commands.
+ *
+ * Note: this also unloads EK, which (along with AIK) will be needed for further
+ * steps. Both of them would have to be recreated or (re-)loaded for each task
+ * that requires them, or skipped here from flushing (in which case this
+ * function doesn't even have to be called for each step). They still should be
+ * flushed when whole application is terminated.
+ */
+static void flush_tpm_contexts(ESYS_CONTEXT *esys_ctx, TPM2_HANDLE hndl)
+{
+    TPMI_YES_NO more_data = TPM2_YES;
+
+    while (more_data == TPM2_YES) {
+        TPMS_CAPABILITY_DATA *cap_data = NULL;
+        TPML_HANDLE          *hlist;
+        ESYS_TR               tr_handle;
+
+        Esys_GetCapability(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                           TPM2_CAP_HANDLES, hndl, 1,
+                           &more_data, &cap_data);
+
+        hlist = &cap_data->data.handles;
+        if (hlist->count == 0)
+            break;
+
+        hndl = hlist->handle[0];
+        printf("Flushing object with handle %8.8x\n", hndl);
+
+        Esys_TR_FromTPMPublic(esys_ctx, hndl++, ESYS_TR_NONE, ESYS_TR_NONE,
+                              ESYS_TR_NONE, &tr_handle);
+        Esys_FlushContext(esys_ctx, tr_handle);
+
+        Esys_Free(cap_data);
+    }
+}
+
 static UsefulBuf read_ek_cert(void)
 {
     UsefulBuf             ret = NULLUsefulBuf;
@@ -294,6 +330,12 @@ UsefulBuf do_challenge(UsefulBuf in)
         return ret;
     }
 
+    flush_tpm_contexts(esys_ctx, TPM2_HMAC_SESSION_FIRST);
+    flush_tpm_contexts(esys_ctx, TPM2_LOADED_SESSION_FIRST);
+    flush_tpm_contexts(esys_ctx, TPM2_POLICY_SESSION_FIRST);
+    flush_tpm_contexts(esys_ctx, TPM2_TRANSIENT_FIRST);
+    flush_tpm_contexts(esys_ctx, TPM2_ACTIVE_SESSION_FIRST);
+
     tss_ret = Esys_TR_FromTPMPublic(esys_ctx, AIK_NV_HANDLE, ESYS_TR_NONE,
                                     ESYS_TR_NONE, ESYS_TR_NONE, &aik_handle);
     if (tss_ret != TSS2_RC_SUCCESS){
@@ -377,43 +419,6 @@ error:
     return ret;
 }
 
-/* Release any transient objects that may have been allocated by commands.
- *
- * Note: this also unloads EK, which (along with AIK) will be needed for further
- * steps. Both of them would have to be recreated or (re-)loaded for each task
- * that requires them, or skipped here from flushing (in which case this
- * function doesn't even have to be called for each step). They still should be
- * flushed when whole application is terminated.
- */
-static void flush_tpm_contexts(ESYS_CONTEXT *esys_ctx)
-{
-    TPMI_YES_NO more_data = TPM2_YES;
-    TPM2_HANDLE hndl = TPM2_TRANSIENT_FIRST;
-
-    while (more_data == TPM2_YES) {
-        TPMS_CAPABILITY_DATA *cap_data = NULL;
-        TPML_HANDLE          *hlist;
-        ESYS_TR               tr_handle;
-
-        Esys_GetCapability(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-                           TPM2_CAP_HANDLES, hndl, 1,
-                           &more_data, &cap_data);
-
-        hlist = &cap_data->data.handles;
-        if (hlist->count == 0)
-            break;
-
-        hndl = hlist->handle[0];
-        printf("Flushing object with handle %8.8x\n", hndl);
-
-        Esys_TR_FromTPMPublic(esys_ctx, hndl++, ESYS_TR_NONE, ESYS_TR_NONE,
-                              ESYS_TR_NONE, &tr_handle);
-        Esys_FlushContext(esys_ctx, tr_handle);
-
-        Esys_Free(cap_data);
-    }
-}
-
 static TPM2B_SENSITIVE_CREATE primarySensitive = {
     .sensitive = {
         .userAuth = {
@@ -427,39 +432,41 @@ static TPM2B_SENSITIVE_CREATE primarySensitive = {
 
 #define ENGINE_HASH_ALG TPM2_ALG_SHA256
 
-#define TPM2B_PUBLIC_PRIMARY_RSA_TEMPLATE { \
-    .publicArea = { \
-        .type = TPM2_ALG_RSA, \
-        .nameAlg = ENGINE_HASH_ALG, \
-        .objectAttributes = (TPMA_OBJECT_USERWITHAUTH | \
-                             TPMA_OBJECT_RESTRICTED | \
-                             TPMA_OBJECT_DECRYPT | \
-                             TPMA_OBJECT_NODA | \
-                             TPMA_OBJECT_FIXEDTPM | \
-                             TPMA_OBJECT_FIXEDPARENT | \
-                             TPMA_OBJECT_SENSITIVEDATAORIGIN), \
-        .authPolicy = { \
-        .size = 0, \
-        }, \
-        .parameters.rsaDetail = { \
-            .symmetric = { \
-                .algorithm = TPM2_ALG_AES, \
-                .keyBits.aes = 128, \
-                .mode.aes = TPM2_ALG_CFB, \
-            }, \
-            .scheme = { \
-                .scheme = TPM2_ALG_NULL, \
-            }, \
-            .keyBits = 2048, \
-            .exponent = 0,\
-        }, \
-        .unique.rsa = { \
-            .size = 0, \
-        } \
-    } \
-}
-
-static TPM2B_PUBLIC primaryRsaTemplate = TPM2B_PUBLIC_PRIMARY_RSA_TEMPLATE;
+/* From https://trustedcomputinggroup.org/wp-content/uploads/TCG_IWG_EKCredentialProfile_v2p3_r2_pub.pdf */
+static TPM2B_PUBLIC primaryRsaTemplate = {
+    .publicArea = {
+        .type = TPM2_ALG_RSA,
+        .nameAlg = ENGINE_HASH_ALG,
+        .objectAttributes = (TPMA_OBJECT_FIXEDTPM |
+                             TPMA_OBJECT_FIXEDPARENT |
+                             TPMA_OBJECT_SENSITIVEDATAORIGIN |
+                             TPMA_OBJECT_ADMINWITHPOLICY |
+                             TPMA_OBJECT_RESTRICTED |
+                             TPMA_OBJECT_DECRYPT),
+        .authPolicy = {
+            .size = 32,
+            .buffer = { 0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xB3, 0xF8,
+                        0x1A, 0x90, 0xCC, 0x8D, 0x46, 0xA5, 0xD7, 0x24,
+                        0xFD, 0x52, 0xD7, 0x6E, 0x06, 0x52, 0x0B, 0x64,
+                        0xF2, 0xA1, 0xDA, 0x1B, 0x33, 0x14, 0x69, 0xAA },
+        },
+        .parameters.rsaDetail = {
+            .symmetric = {
+                .algorithm = TPM2_ALG_AES,
+                .keyBits.aes = 128,
+                .mode.aes = TPM2_ALG_CFB,
+            },
+            .scheme = {
+                .scheme = TPM2_ALG_NULL,
+            },
+            .keyBits = 2048,
+            .exponent = 0,
+        },
+        .unique.rsa = {
+            .size = 256,
+        }
+    }
+};
 
 static TPM2B_PUBLIC keyTemplate = {
     .publicArea = {
@@ -494,6 +501,7 @@ TSS2_RC init_tpm_keys(void)
     TSS2_RC                tss_ret = TSS2_RC_SUCCESS;
     ESYS_TR                parent = ESYS_TR_NONE;
     ESYS_TR                aik = ESYS_TR_NONE;
+    ESYS_TR                tmp_new;
     TPM2B_TEMPLATE         inPublic;
     TPM2B_SENSITIVE_CREATE inSensitive = {
         .sensitive = {
@@ -577,6 +585,8 @@ TSS2_RC init_tpm_keys(void)
             goto error;
         }
 
+        fprintf(stderr, "%d\n", __LINE__);
+
         tss_ret = Esys_CreateLoaded(esys_ctx, parent, ESYS_TR_PASSWORD,
                                     ESYS_TR_NONE, ESYS_TR_NONE, &inSensitive,
                                     &inPublic, &aik, &keyPrivate, &keyPublic);
@@ -586,27 +596,34 @@ TSS2_RC init_tpm_keys(void)
             goto error;
         }
 
+
+        fprintf(stderr, "%d\n", __LINE__);
+
         memset(keyPrivate, 0, sizeof(*keyPrivate));
         Esys_Free(keyPrivate);
         keyPrivate = NULL;
 
         tss_ret = Esys_EvictControl(esys_ctx, ESYS_TR_RH_OWNER, aik,
                                     ESYS_TR_PASSWORD, ESYS_TR_NONE,
-                                    ESYS_TR_NONE, AIK_NV_HANDLE, &aik);
+                                    ESYS_TR_NONE, AIK_NV_HANDLE, &tmp_new);
         if (tss_ret != TSS2_RC_SUCCESS) {
             fprintf(stderr, "Error: Esys_EvictControl() %s\n",
                     Tss2_RC_Decode(tss_ret));
             goto error;
         }
+        Esys_FlushContext(esys_ctx, aik);
+        aik = tmp_new;
 
         tss_ret = Esys_EvictControl(esys_ctx, ESYS_TR_RH_OWNER, parent,
                                     ESYS_TR_PASSWORD, ESYS_TR_NONE,
-                                    ESYS_TR_NONE, EK_NV_HANDLE, &parent);
+                                    ESYS_TR_NONE, EK_NV_HANDLE, &tmp_new);
         if (tss_ret != TSS2_RC_SUCCESS) {
             fprintf(stderr, "Error: Esys_EvictControl() %s\n",
                     Tss2_RC_Decode(tss_ret));
             goto error;
         }
+        Esys_FlushContext(esys_ctx, parent);
+        parent = tmp_new;
     } else {
         TPM2B_NAME *name, *qname;
 
@@ -637,7 +654,7 @@ error:
     Esys_Free(capabilityData);
 
     if (esys_ctx != NULL) {
-        flush_tpm_contexts(esys_ctx);
+        flush_tpm_contexts(esys_ctx, TPM2_TRANSIENT_FIRST);
         Esys_Finalize(&esys_ctx);
     }
 
@@ -654,7 +671,7 @@ void tpm_cleanup(void)
     Esys_Free(keyPublic);
     keyPublic = NULL;
 
-    flush_tpm_contexts(esys_ctx);
+    flush_tpm_contexts(esys_ctx, TPM2_TRANSIENT_FIRST);
     Esys_Finalize(&esys_ctx);
 
     Tss2_TctiLdr_Finalize(&tcti_ctx);
