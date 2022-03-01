@@ -15,6 +15,8 @@ static ESYS_CONTEXT         *esys_ctx;
 static TSS2_TCTI_CONTEXT    *tcti_ctx;
 static TPM2B_PUBLIC         *keyPublic;
 
+static const TPMT_SYM_DEF sym_null = {.algorithm=TPM2_ALG_NULL};
+
 #define AIK_NV_HANDLE       0x8100F0BA
 #define EK_NV_HANDLE        0x8100F0BE
 #define EK_CERT_NV_HANDLE   0x01C00002
@@ -111,7 +113,6 @@ static UsefulBuf read_ek_cert(void)
     TPM2B_MAX_NV_BUFFER  *data;
     TPM2B_AUTH            passwd = {.size=4, .buffer={0x01, 0xC0, 0x00, 0x02}};
     TPM2B_NONCE           nonceCaller = {.size=0x20};
-    TPMT_SYM_DEF          sym_null = {.algorithm=TPM2_ALG_NULL};
     uint32_t              chunk_size;
     TPMS_CAPABILITY_DATA *capability_data = NULL;
 
@@ -501,7 +502,7 @@ TSS2_RC init_tpm_keys(void)
     TSS2_RC                tss_ret = TSS2_RC_SUCCESS;
     ESYS_TR                parent = ESYS_TR_NONE;
     ESYS_TR                aik = ESYS_TR_NONE;
-    ESYS_TR                tmp_new;
+    ESYS_TR                tmp_new, session;
     TPM2B_TEMPLATE         inPublic;
     TPM2B_SENSITIVE_CREATE inSensitive = {
         .sensitive = {
@@ -519,6 +520,7 @@ TSS2_RC init_tpm_keys(void)
     TPM2B_DIGEST           ownerauth = { .size = 0 };
     TPMS_CAPABILITY_DATA  *capabilityData = NULL;
     TPM2B_PRIVATE         *keyPrivate;
+    TPM2B_NONCE            nonceCaller = {.size=0x20};
 
     size_t out_size = 0;
 
@@ -585,9 +587,27 @@ TSS2_RC init_tpm_keys(void)
             goto error;
         }
 
-        fprintf(stderr, "%d\n", __LINE__);
+        tss_ret = Esys_StartAuthSession(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                                        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                                        &nonceCaller, TPM2_SE_POLICY, &sym_null,
+                                        TPM2_ALG_SHA256, &session);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            fprintf(stderr, "Error: Esys_StartAuthSession() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
 
-        tss_ret = Esys_CreateLoaded(esys_ctx, parent, ESYS_TR_PASSWORD,
+        tss_ret = Esys_PolicySecret(esys_ctx, ESYS_TR_RH_ENDORSEMENT, session,
+                                    ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+                                    NULL, NULL, NULL, 0, NULL, NULL);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            printf("Error: Esys_PolicySecret() %s\n", Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+
+
+        /* TODO: revert to Create + Load */
+        tss_ret = Esys_CreateLoaded(esys_ctx, parent, session,
                                     ESYS_TR_NONE, ESYS_TR_NONE, &inSensitive,
                                     &inPublic, &aik, &keyPrivate, &keyPublic);
         if (tss_ret != TSS2_RC_SUCCESS) {
@@ -595,9 +615,9 @@ TSS2_RC init_tpm_keys(void)
                     Tss2_RC_Decode(tss_ret));
             goto error;
         }
+        Esys_FlushContext(esys_ctx, session);
 
 
-        fprintf(stderr, "%d\n", __LINE__);
 
         memset(keyPrivate, 0, sizeof(*keyPrivate));
         Esys_Free(keyPrivate);
@@ -651,6 +671,7 @@ TSS2_RC init_tpm_keys(void)
     return TSS2_RC_SUCCESS;
 
 error:
+    Esys_FlushContext(esys_ctx, aik);
     Esys_Free(capabilityData);
 
     if (esys_ctx != NULL) {
