@@ -14,6 +14,87 @@
 static ESYS_CONTEXT         *esys_ctx;
 static TSS2_TCTI_CONTEXT    *tcti_ctx;
 static TPM2B_PUBLIC         *keyPublic;
+static TPM2B_NAME           *name;
+
+/* Constants used by Esys_StartAuthSession */
+static const TPMT_SYM_DEF   sym_null = {.algorithm = TPM2_ALG_NULL};
+static const TPM2B_NONCE    nonceCaller = {.size = 0x20};
+
+/* Constants used by Esys_Create* functions */
+static const TPM2B_SENSITIVE_CREATE inSensitive = {
+    .sensitive = {
+        .userAuth = {
+            .size = 0,
+        },
+        .data = {
+            .size = 0,
+        }
+    }
+};
+
+/* From TCG EK Credential Profile For TPM Family 2.0; Level 0 Version 2.3 */
+static const TPM2B_PUBLIC primaryRsaTemplate = {
+    .publicArea = {
+        .type = TPM2_ALG_RSA,
+        .nameAlg = TPM2_ALG_SHA256,
+        .objectAttributes = (TPMA_OBJECT_FIXEDTPM |
+                             TPMA_OBJECT_FIXEDPARENT |
+                             TPMA_OBJECT_SENSITIVEDATAORIGIN |
+                             TPMA_OBJECT_ADMINWITHPOLICY |
+                             TPMA_OBJECT_RESTRICTED |
+                             TPMA_OBJECT_DECRYPT),
+        .authPolicy = {
+            .size = 32,
+            .buffer = { 0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xB3, 0xF8,
+                        0x1A, 0x90, 0xCC, 0x8D, 0x46, 0xA5, 0xD7, 0x24,
+                        0xFD, 0x52, 0xD7, 0x6E, 0x06, 0x52, 0x0B, 0x64,
+                        0xF2, 0xA1, 0xDA, 0x1B, 0x33, 0x14, 0x69, 0xAA },
+        },
+        .parameters.rsaDetail = {
+            .symmetric = {
+                .algorithm = TPM2_ALG_AES,
+                .keyBits.aes = 128,
+                .mode.aes = TPM2_ALG_CFB,
+            },
+            .scheme = {
+                .scheme = TPM2_ALG_NULL,
+            },
+            .keyBits = 2048,
+            .exponent = 0,
+        },
+        .unique.rsa = {
+            .size = 256,
+        }
+    }
+};
+
+static const TPM2B_PUBLIC keyTemplate = {
+    .publicArea = {
+        .type = TPM2_ALG_RSA,
+        .nameAlg = TPM2_ALG_SHA256,
+        .objectAttributes = (TPMA_OBJECT_USERWITHAUTH |
+                             TPMA_OBJECT_SIGN_ENCRYPT |
+                             TPMA_OBJECT_DECRYPT |
+                             TPMA_OBJECT_FIXEDTPM |
+                             TPMA_OBJECT_FIXEDPARENT |
+                             TPMA_OBJECT_SENSITIVEDATAORIGIN |
+                             TPMA_OBJECT_NODA),
+        .authPolicy.size = 0,
+        .parameters.rsaDetail = {
+            .symmetric = {
+                .algorithm = TPM2_ALG_NULL,
+                .keyBits.aes = 0,
+                .mode.aes = 0,
+            },
+            .scheme = {
+                .scheme = TPM2_ALG_NULL,
+            },
+            .keyBits = 2048,
+            .exponent = 0,
+        },
+        .unique.rsa.size = 0
+    }
+};
 
 #define AIK_NV_HANDLE       0x8100F0BA
 #define EK_NV_HANDLE        0x8100F0BE
@@ -65,6 +146,61 @@ void hexdump(const void *memory, size_t length)
 	}
 }
 
+/* Release any objects of type 'hndl' that may have been allocated by commands */
+static void flush_tpm_contexts(ESYS_CONTEXT *esys_ctx, TPM2_HANDLE hndl)
+{
+    TPMI_YES_NO more_data = TPM2_YES;
+
+    while (more_data == TPM2_YES) {
+        TPMS_CAPABILITY_DATA *cap_data = NULL;
+        TPML_HANDLE          *hlist;
+        ESYS_TR               tr_handle;
+
+        Esys_GetCapability(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                           TPM2_CAP_HANDLES, hndl, 1,
+                           &more_data, &cap_data);
+
+        hlist = &cap_data->data.handles;
+        if (hlist->count == 0)
+            break;
+
+        hndl = hlist->handle[0];
+        printf("Flushing object with handle %8.8x\n", hndl);
+
+        Esys_TR_FromTPMPublic(esys_ctx, hndl++, ESYS_TR_NONE, ESYS_TR_NONE,
+                              ESYS_TR_NONE, &tr_handle);
+        Esys_FlushContext(esys_ctx, tr_handle);
+
+        Esys_Free(cap_data);
+    }
+}
+
+static TSS2_RC start_policy_auth(ESYS_TR *session)
+{
+    TSS2_RC tss_ret;
+
+    tss_ret = Esys_StartAuthSession(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                                    &nonceCaller, TPM2_SE_POLICY, &sym_null,
+                                    TPM2_ALG_SHA256, session);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        fprintf(stderr, "Error: Esys_StartAuthSession() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        return tss_ret;
+    }
+
+    tss_ret = Esys_PolicySecret(esys_ctx, ESYS_TR_RH_ENDORSEMENT, *session,
+                                ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+                                NULL, NULL, NULL, 0, NULL, NULL);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        fprintf(stderr, "Error: Esys_PolicySecret() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        return tss_ret;
+    }
+
+    return TSS2_RC_SUCCESS;
+}
+
 static UsefulBuf read_ek_cert(void)
 {
     UsefulBuf             ret = NULLUsefulBuf;
@@ -73,9 +209,14 @@ static UsefulBuf read_ek_cert(void)
     ESYS_TR               session;
     TPM2B_NV_PUBLIC      *public;
     TPM2B_MAX_NV_BUFFER  *data;
-    TPM2B_AUTH            passwd = {.size=4, .buffer={0x01, 0xC0, 0x00, 0x02}};
-    TPM2B_NONCE           nonceCaller = {.size=0x20};
-    TPMT_SYM_DEF          sym_null = {.algorithm=TPM2_ALG_NULL};
+    TPM2B_AUTH            passwd = {
+                            .size = 4,
+                            .buffer = {
+                                (EK_CERT_NV_HANDLE >> 24) & 0xFF,
+                                (EK_CERT_NV_HANDLE >> 16) & 0xFF,
+                                (EK_CERT_NV_HANDLE >>  8) & 0xFF,
+                                (EK_CERT_NV_HANDLE >>  0) & 0xFF,
+                            }};
     uint32_t              chunk_size;
     TPMS_CAPABILITY_DATA *capability_data = NULL;
 
@@ -183,7 +324,6 @@ static UsefulBuf _encode_aik(UsefulBuf buf, UsefulBuf lkn)
      *   zero. An exponent of zero indicates that the exponent is the default of
      *   2^16 + 1. Support for other values is optional.
      */
-    /* TODO: is endianness correct? */
     uint32_t exponent = keyPublic->publicArea.parameters.rsaDetail.exponent;
     if (exponent == 0)
         exponent = 0x00010001;
@@ -213,7 +353,7 @@ static UsefulBuf _encode_aik(UsefulBuf buf, UsefulBuf lkn)
     UsefulBufC EncodedCBOR;
     QCBORError uErr;
     uErr = QCBOREncode_Finish(&ctx, &EncodedCBOR);
-    if(uErr != QCBOR_SUCCESS) {
+    if (uErr != QCBOR_SUCCESS) {
         fprintf(stderr, "QCBOR error: %d\n", uErr);
         return NULLUsefulBuf;
     } else {
@@ -225,24 +365,12 @@ UsefulBuf encode_aik(void)
 {
     UsefulBuf       ret = NULLUsefulBuf;
     UsefulBuf       lkn;
-    TPM2B_NAME     *name = NULL;
-    ESYS_TR         handle;
-    TSS2_RC         tss_ret;
 
-    tss_ret = Esys_TR_FromTPMPublic(esys_ctx, AIK_NV_HANDLE, ESYS_TR_NONE,
-                                    ESYS_TR_NONE, ESYS_TR_NONE, &handle);
-    if (tss_ret != TSS2_RC_SUCCESS){
-        fprintf(stderr, "Error: Esys_TR_FromTPMPublic() %s\n",
-                Tss2_RC_Decode(tss_ret));
-        goto error;
+    if (name == NULL) {
+        fprintf(stderr, "Couldn't read AIK loaded key name\n");
+        return NULLUsefulBuf;
     }
 
-    tss_ret = Esys_TR_GetName(esys_ctx, handle, &name);
-    if (tss_ret != TSS2_RC_SUCCESS){
-        fprintf(stderr, "Error: Esys_TR_GetName() %s\n",
-                Tss2_RC_Decode(tss_ret));
-        goto error;
-    }
     lkn.ptr = name->name;
     lkn.len = name->size;
 
@@ -258,11 +386,30 @@ UsefulBuf encode_aik(void)
     ret.ptr = malloc(ret.len);
     ret = _encode_aik(ret, lkn);
 
-error:
-
-    Esys_Free(name);
-
     return ret;
+}
+
+UsefulBuf encode_aik_marshaled(void)
+{
+    UsefulBuf   marshaled;
+    size_t      offset = 0;
+    TSS2_RC     tss_ret;
+
+    /* Marshaled data will never be larger than unmarshaled */
+    marshaled.ptr = malloc(sizeof(*keyPublic));
+    marshaled.len = sizeof(*keyPublic);
+
+    tss_ret = Tss2_MU_TPM2B_PUBLIC_Marshal(keyPublic, marshaled.ptr,
+                                           marshaled.len, &offset);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        fprintf(stderr, "Error: Tss2_MU_TPM2B_PUBLIC_Marshal() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        return NULLUsefulBuf;
+    }
+
+    marshaled.len = offset;
+
+    return marshaled;
 }
 
 UsefulBuf do_challenge(UsefulBuf in)
@@ -277,8 +424,6 @@ UsefulBuf do_challenge(UsefulBuf in)
     TPM2B_ID_OBJECT         tpm_id_object;
     TPM2B_ENCRYPTED_SECRET  tpm_enc_secret;
     TSS2_RC                 tss_ret;
-    TPM2B_NONCE             nonceCaller = {.size=0x20};
-    TPMT_SYM_DEF            sym_null = {.algorithm=TPM2_ALG_NULL};
 
     /* Let QCBORDecode internal error tracking do its work. */
     QCBORDecode_Init(&ctx, UsefulBuf_Const(in), QCBOR_DECODE_MODE_NORMAL);
@@ -294,6 +439,7 @@ UsefulBuf do_challenge(UsefulBuf in)
         return ret;
     }
 
+    /* Convert TPM handles to ESYS_TR */
     tss_ret = Esys_TR_FromTPMPublic(esys_ctx, AIK_NV_HANDLE, ESYS_TR_NONE,
                                     ESYS_TR_NONE, ESYS_TR_NONE, &aik_handle);
     if (tss_ret != TSS2_RC_SUCCESS){
@@ -310,6 +456,7 @@ UsefulBuf do_challenge(UsefulBuf in)
         goto error;
     }
 
+    /* Unmarshal challenge blobs */
     tss_ret = Tss2_MU_TPM2B_ID_OBJECT_Unmarshal(id_object.ptr, id_object.len,
                                                 NULL, &tpm_id_object);
     if (tss_ret != TSS2_RC_SUCCESS){
@@ -327,29 +474,19 @@ UsefulBuf do_challenge(UsefulBuf in)
         goto error;
     }
 
-    tss_ret = Esys_StartAuthSession(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
-                                    ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-                                    &nonceCaller, TPM2_SE_POLICY, &sym_null,
-                                    TPM2_ALG_SHA256, &ek_session);
-    if (tss_ret != TSS2_RC_SUCCESS) {
-        printf("Error: Esys_StartAuthSession() %s\n", Tss2_RC_Decode(tss_ret));
+    /* Start policy authorization for EK */
+    tss_ret = start_policy_auth(&ek_session);
+    if (tss_ret != TSS2_RC_SUCCESS)
         goto error;
-    }
 
-    tss_ret = Esys_PolicySecret(esys_ctx, ESYS_TR_RH_ENDORSEMENT, ek_session,
-                                ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
-                                NULL, NULL, NULL, 0, NULL, NULL);
-    if (tss_ret != TSS2_RC_SUCCESS) {
-        printf("Error: Esys_PolicySecret() %s\n", Tss2_RC_Decode(tss_ret));
-        goto error;
-    }
-
+    /* Start HMAC authorization for AIK */
     tss_ret = Esys_StartAuthSession(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
                                     ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
                                     &nonceCaller, TPM2_SE_HMAC, &sym_null,
                                     TPM2_ALG_SHA256, &aik_session);
     if (tss_ret != TSS2_RC_SUCCESS) {
-        printf("Error: Esys_StartAuthSession() %s\n", Tss2_RC_Decode(tss_ret));
+        fprintf(stderr, "Error: Esys_StartAuthSession() %s\n",
+                Tss2_RC_Decode(tss_ret));
         goto error;
     }
 
@@ -377,138 +514,14 @@ error:
     return ret;
 }
 
-/* Release any transient objects that may have been allocated by commands.
- *
- * Note: this also unloads EK, which (along with AIK) will be needed for further
- * steps. Both of them would have to be recreated or (re-)loaded for each task
- * that requires them, or skipped here from flushing (in which case this
- * function doesn't even have to be called for each step). They still should be
- * flushed when whole application is terminated.
- */
-static void flush_tpm_contexts(ESYS_CONTEXT *esys_ctx)
-{
-    TPMI_YES_NO more_data = TPM2_YES;
-    TPM2_HANDLE hndl = TPM2_TRANSIENT_FIRST;
-
-    while (more_data == TPM2_YES) {
-        TPMS_CAPABILITY_DATA *cap_data = NULL;
-        TPML_HANDLE          *hlist;
-        ESYS_TR               tr_handle;
-
-        Esys_GetCapability(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-                           TPM2_CAP_HANDLES, hndl, 1,
-                           &more_data, &cap_data);
-
-        hlist = &cap_data->data.handles;
-        if (hlist->count == 0)
-            break;
-
-        hndl = hlist->handle[0];
-        printf("Flushing object with handle %8.8x\n", hndl);
-
-        Esys_TR_FromTPMPublic(esys_ctx, hndl++, ESYS_TR_NONE, ESYS_TR_NONE,
-                              ESYS_TR_NONE, &tr_handle);
-        Esys_FlushContext(esys_ctx, tr_handle);
-
-        Esys_Free(cap_data);
-    }
-}
-
-static TPM2B_SENSITIVE_CREATE primarySensitive = {
-    .sensitive = {
-        .userAuth = {
-            .size = 0,
-        },
-        .data = {
-            .size = 0,
-        }
-    }
-};
-
-#define ENGINE_HASH_ALG TPM2_ALG_SHA256
-
-#define TPM2B_PUBLIC_PRIMARY_RSA_TEMPLATE { \
-    .publicArea = { \
-        .type = TPM2_ALG_RSA, \
-        .nameAlg = ENGINE_HASH_ALG, \
-        .objectAttributes = (TPMA_OBJECT_USERWITHAUTH | \
-                             TPMA_OBJECT_RESTRICTED | \
-                             TPMA_OBJECT_DECRYPT | \
-                             TPMA_OBJECT_NODA | \
-                             TPMA_OBJECT_FIXEDTPM | \
-                             TPMA_OBJECT_FIXEDPARENT | \
-                             TPMA_OBJECT_SENSITIVEDATAORIGIN), \
-        .authPolicy = { \
-        .size = 0, \
-        }, \
-        .parameters.rsaDetail = { \
-            .symmetric = { \
-                .algorithm = TPM2_ALG_AES, \
-                .keyBits.aes = 128, \
-                .mode.aes = TPM2_ALG_CFB, \
-            }, \
-            .scheme = { \
-                .scheme = TPM2_ALG_NULL, \
-            }, \
-            .keyBits = 2048, \
-            .exponent = 0,\
-        }, \
-        .unique.rsa = { \
-            .size = 0, \
-        } \
-    } \
-}
-
-static TPM2B_PUBLIC primaryRsaTemplate = TPM2B_PUBLIC_PRIMARY_RSA_TEMPLATE;
-
-static TPM2B_PUBLIC keyTemplate = {
-    .publicArea = {
-        .type = TPM2_ALG_RSA,
-        .nameAlg = TPM2_ALG_SHA256,
-        .objectAttributes = (TPMA_OBJECT_USERWITHAUTH |
-                             TPMA_OBJECT_SIGN_ENCRYPT |
-                             TPMA_OBJECT_DECRYPT |
-                             TPMA_OBJECT_FIXEDTPM |
-                             TPMA_OBJECT_FIXEDPARENT |
-                             TPMA_OBJECT_SENSITIVEDATAORIGIN |
-                             TPMA_OBJECT_NODA),
-        .authPolicy.size = 0,
-        .parameters.rsaDetail = {
-            .symmetric = {
-                .algorithm = TPM2_ALG_NULL,
-                .keyBits.aes = 0,
-                .mode.aes = 0,
-            },
-            .scheme = {
-                .scheme = TPM2_ALG_NULL,
-            },
-            .keyBits = 2048,
-            .exponent = 0,
-        },
-        .unique.rsa.size = 0
-    }
-};
-
 TSS2_RC init_tpm_keys(void)
 {
     TSS2_RC                tss_ret = TSS2_RC_SUCCESS;
     ESYS_TR                parent = ESYS_TR_NONE;
     ESYS_TR                aik = ESYS_TR_NONE;
+    ESYS_TR                tmp_new, session;
     TPM2B_TEMPLATE         inPublic;
-    TPM2B_SENSITIVE_CREATE inSensitive = {
-        .sensitive = {
-            .userAuth = {
-                .size = 0,
-            },
-            .data = {
-                .size = 0,
-            }
-        }
-    };
-
-    TPM2B_DATA             outsideInfo = { .size = 0, };
     TPML_PCR_SELECTION     creationPCR = { .count = 0, };
-    TPM2B_DIGEST           ownerauth = { .size = 0 };
     TPMS_CAPABILITY_DATA  *capabilityData = NULL;
     TPM2B_PRIVATE         *keyPrivate;
 
@@ -546,13 +559,6 @@ TSS2_RC init_tpm_keys(void)
         goto error;
     }
 
-    tss_ret = Esys_TR_SetAuth(esys_ctx, ESYS_TR_RH_OWNER, &ownerauth);
-    if (tss_ret != TSS2_RC_SUCCESS) {
-        fprintf(stderr, "Error: Esys_TR_SetAuth() %s\n",
-                Tss2_RC_Decode(tss_ret));
-        goto error;
-    }
-
     tss_ret = Esys_GetCapability(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
                                  ESYS_TR_NONE, TPM2_CAP_HANDLES, AIK_NV_HANDLE,
                                  1, NULL, &capabilityData);
@@ -565,68 +571,95 @@ TSS2_RC init_tpm_keys(void)
     if (capabilityData->data.handles.count == 0 ||
         capabilityData->data.handles.handle[0] != AIK_NV_HANDLE) {
         printf("AIK not found, generating one now. This may take a while...\n");
+        /* Create and load EK */
         tss_ret = Esys_CreatePrimary(esys_ctx, ESYS_TR_RH_ENDORSEMENT,
                                      ESYS_TR_PASSWORD, ESYS_TR_NONE,
-                                     ESYS_TR_NONE, &primarySensitive,
-                                     &primaryRsaTemplate, &outsideInfo,
-                                     &creationPCR, &parent, NULL, NULL, NULL,
-                                     NULL);
+                                     ESYS_TR_NONE, &inSensitive,
+                                     &primaryRsaTemplate, NULL, &creationPCR,
+                                     &parent, NULL, NULL, NULL, NULL);
         if (tss_ret != TSS2_RC_SUCCESS) {
             fprintf(stderr, "Error: Esys_CreatePrimary() %s\n",
             Tss2_RC_Decode(tss_ret));
             goto error;
         }
 
-        tss_ret = Esys_CreateLoaded(esys_ctx, parent, ESYS_TR_PASSWORD,
-                                    ESYS_TR_NONE, ESYS_TR_NONE, &inSensitive,
-                                    &inPublic, &aik, &keyPrivate, &keyPublic);
+        /* Start authorization session and create AIK */
+        tss_ret = start_policy_auth(&session);
+        if (tss_ret != TSS2_RC_SUCCESS)
+            goto error;
+
+        tss_ret = Esys_Create(esys_ctx, parent, session, ESYS_TR_NONE,
+                              ESYS_TR_NONE, &inSensitive, &keyTemplate, NULL,
+                              &creationPCR, &keyPrivate, &keyPublic, NULL, NULL,
+                              NULL);
         if (tss_ret != TSS2_RC_SUCCESS) {
-            fprintf(stderr, "Error: Esys_CreateLoaded() %s\n",
+            fprintf(stderr, "Error: Esys_Create() %s\n",
                     Tss2_RC_Decode(tss_ret));
             goto error;
         }
+        Esys_FlushContext(esys_ctx, session);
 
+        /* Restart identical authorization session and load AIK */
+        tss_ret = start_policy_auth(&session);
+        if (tss_ret != TSS2_RC_SUCCESS)
+            goto error;
+
+        tss_ret = Esys_Load(esys_ctx, parent, session, ESYS_TR_NONE,
+                            ESYS_TR_NONE, keyPrivate, keyPublic, &aik);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            fprintf(stderr, "Error: Esys_Load() %s\n", Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+        Esys_FlushContext(esys_ctx, session);
+
+        /* Clear private AIK, it won't be needed */
         memset(keyPrivate, 0, sizeof(*keyPrivate));
         Esys_Free(keyPrivate);
         keyPrivate = NULL;
 
+        /* Clear public AIK, it will be reloaded from NV to get its name */
+        memset(keyPublic, 0, sizeof(*keyPublic));
+        Esys_Free(keyPublic);
+        keyPublic = NULL;
+
+        /* Make AIK persistent */
         tss_ret = Esys_EvictControl(esys_ctx, ESYS_TR_RH_OWNER, aik,
                                     ESYS_TR_PASSWORD, ESYS_TR_NONE,
-                                    ESYS_TR_NONE, AIK_NV_HANDLE, &aik);
+                                    ESYS_TR_NONE, AIK_NV_HANDLE, &tmp_new);
         if (tss_ret != TSS2_RC_SUCCESS) {
             fprintf(stderr, "Error: Esys_EvictControl() %s\n",
                     Tss2_RC_Decode(tss_ret));
             goto error;
         }
+        Esys_FlushContext(esys_ctx, aik);
 
+        /* Make EK persistent */
         tss_ret = Esys_EvictControl(esys_ctx, ESYS_TR_RH_OWNER, parent,
                                     ESYS_TR_PASSWORD, ESYS_TR_NONE,
-                                    ESYS_TR_NONE, EK_NV_HANDLE, &parent);
+                                    ESYS_TR_NONE, EK_NV_HANDLE, &tmp_new);
         if (tss_ret != TSS2_RC_SUCCESS) {
             fprintf(stderr, "Error: Esys_EvictControl() %s\n",
                     Tss2_RC_Decode(tss_ret));
             goto error;
         }
-    } else {
-        TPM2B_NAME *name, *qname;
+        Esys_FlushContext(esys_ctx, parent);
+    }
 
-        tss_ret = Esys_TR_FromTPMPublic(esys_ctx, AIK_NV_HANDLE, ESYS_TR_NONE,
-                                        ESYS_TR_NONE, ESYS_TR_NONE, &aik);
-        if (tss_ret != TSS2_RC_SUCCESS){
-            fprintf(stderr, "Error: Esys_TR_FromTPMPublic() %s\n",
-                    Tss2_RC_Decode(tss_ret));
-            goto error;
-        }
+    /* Read public AIK and its name from NV handle */
+    tss_ret = Esys_TR_FromTPMPublic(esys_ctx, AIK_NV_HANDLE, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, &aik);
+    if (tss_ret != TSS2_RC_SUCCESS){
+        fprintf(stderr, "Error: Esys_TR_FromTPMPublic() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
 
-        tss_ret = Esys_ReadPublic(esys_ctx, aik, ESYS_TR_NONE, ESYS_TR_NONE,
-                                  ESYS_TR_NONE, &keyPublic, &name, &qname);
-        Esys_Free(name);
-        Esys_Free(qname);
-        if (tss_ret != TSS2_RC_SUCCESS) {
-            fprintf(stderr, "Error: Esys_ReadPublic() %s\n",
-                    Tss2_RC_Decode(tss_ret));
-            goto error;
-        }
+    tss_ret = Esys_ReadPublic(esys_ctx, aik, ESYS_TR_NONE, ESYS_TR_NONE,
+                              ESYS_TR_NONE, &keyPublic, &name, NULL);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        fprintf(stderr, "Error: Esys_ReadPublic() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
     }
 
     hexdump(keyPublic, sizeof(*keyPublic));
@@ -637,7 +670,7 @@ error:
     Esys_Free(capabilityData);
 
     if (esys_ctx != NULL) {
-        flush_tpm_contexts(esys_ctx);
+        flush_tpm_contexts(esys_ctx, TPM2_TRANSIENT_FIRST);
         Esys_Finalize(&esys_ctx);
     }
 
@@ -654,7 +687,17 @@ void tpm_cleanup(void)
     Esys_Free(keyPublic);
     keyPublic = NULL;
 
-    flush_tpm_contexts(esys_ctx);
+    memset(name, 0, sizeof(*name));
+    Esys_Free(name);
+    name = NULL;
+
+    /* All handles should be already flushed, this will print all missed ones */
+    flush_tpm_contexts(esys_ctx, TPM2_HMAC_SESSION_FIRST);
+    flush_tpm_contexts(esys_ctx, TPM2_LOADED_SESSION_FIRST);
+    flush_tpm_contexts(esys_ctx, TPM2_POLICY_SESSION_FIRST);
+    flush_tpm_contexts(esys_ctx, TPM2_TRANSIENT_FIRST);
+    flush_tpm_contexts(esys_ctx, TPM2_ACTIVE_SESSION_FIRST);
+
     Esys_Finalize(&esys_ctx);
 
     Tss2_TctiLdr_Finalize(&tcti_ctx);
