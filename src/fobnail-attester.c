@@ -69,9 +69,9 @@ static void coap_ek_handler(struct coap_resource_t* resource, struct coap_sessio
 
     printf("Received message: %s\n", coap_get_uri_path(in)->s);
 
-    UsefulBuf ub = encode_ek();
+    UsefulBuf ub = read_ek_cert();
     if (UsefulBuf_IsNULLOrEmpty(ub)) {
-        fprintf(stderr, "Error: cannot obtain EK\n");
+        fprintf(stderr, "Error: cannot obtain EK certificate\n");
         /* We probably should mention the error in response */
         quit = -1;
         return;
@@ -104,9 +104,9 @@ static void coap_aik_handler(struct coap_resource_t* resource, struct coap_sessi
 
     printf("Received message: %s\n", coap_get_uri_path(in)->s);
 
-    UsefulBuf ub = encode_aik();
+    UsefulBuf ub = get_aik();
     if (UsefulBuf_IsNULLOrEmpty(ub)) {
-        fprintf(stderr, "Error: cannot encode AIK into CBOR\n");
+        fprintf(stderr, "Error: cannot obtain AIK\n");
         /* We probably should mention the error in response */
         quit = -1;
         return;
@@ -119,7 +119,7 @@ static void coap_aik_handler(struct coap_resource_t* resource, struct coap_sessi
                        in,
                        out,
                        query,
-                       COAP_MEDIATYPE_APPLICATION_CBOR,
+                       COAP_MEDIATYPE_APPLICATION_OCTET_STREAM,
                        -1,
                        0,
                        ub.len,
@@ -273,41 +273,6 @@ static void coap_metadata_handler(struct coap_resource_t* resource, struct coap_
         fprintf(stderr, "Err: cannot response.\n");
 }
 
-static void coap_aik_marshaled_handler(struct coap_resource_t* resource, struct coap_session_t* session,
-                const struct coap_pdu_t* in, const struct coap_string_t* query,
-                struct coap_pdu_t* out)
-{
-    int ret;
-
-    printf("Received message: %s\n", coap_get_uri_path(in)->s);
-
-    UsefulBuf ub = encode_aik_marshaled();
-    if (UsefulBuf_IsNULLOrEmpty(ub)) {
-        fprintf(stderr, "Error: cannot obtain AIK\n");
-        /* We probably should mention the error in response */
-        quit = -1;
-        return;
-    }
-
-    /* prepare and send response */
-    coap_pdu_set_code(out, COAP_RESPONSE_CODE_CONTENT);
-    ret = coap_add_data_large_response(resource,
-                       session,
-                       in,
-                       out,
-                       query,
-                       COAP_MEDIATYPE_APPLICATION_OCTET_STREAM,
-                       -1,
-                       0,
-                       ub.len,
-                       ub.ptr,
-                       coap_free_wrapper,
-                       ub.ptr);
-    if (ret == 0)
-        fprintf(stderr, "Err: cannot response.\n");
-
-}
-
 static void coap_challenge_handler(struct coap_resource_t* resource, struct coap_session_t* session,
                 const struct coap_pdu_t* in, const struct coap_string_t* query,
                 struct coap_pdu_t* out)
@@ -442,7 +407,6 @@ int main(int UNUSED argc, char UNUSED *argv[])
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "attest", coap_attest_handler);
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "ek", coap_ek_handler);
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "aik", coap_aik_handler);
-    att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "aik_marshaled", coap_aik_marshaled_handler);
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "metadata", coap_metadata_handler);
     att_coap_add_resource(coap_context, COAP_REQUEST_POST, "challenge", coap_challenge_handler);
 
