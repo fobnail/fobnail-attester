@@ -14,7 +14,6 @@
 static ESYS_CONTEXT         *esys_ctx;
 static TSS2_TCTI_CONTEXT    *tcti_ctx;
 static TPM2B_PUBLIC         *keyPublic;
-static TPM2B_NAME           *name;
 
 /* Constants used by Esys_StartAuthSession */
 static const TPMT_SYM_DEF   sym_null = {.algorithm = TPM2_ALG_NULL};
@@ -534,11 +533,6 @@ TSS2_RC init_tpm_keys(void)
         Esys_Free(keyPrivate);
         keyPrivate = NULL;
 
-        /* Clear public AIK, it will be reloaded from NV to get its name */
-        memset(keyPublic, 0, sizeof(*keyPublic));
-        Esys_Free(keyPublic);
-        keyPublic = NULL;
-
         /* Make AIK persistent */
         tss_ret = Esys_EvictControl(esys_ctx, ESYS_TR_RH_OWNER, aik,
                                     ESYS_TR_PASSWORD, ESYS_TR_NONE,
@@ -560,23 +554,23 @@ TSS2_RC init_tpm_keys(void)
             goto error;
         }
         Esys_FlushContext(esys_ctx, parent);
-    }
+    } else {
+        /* Read public AIK from NV handle */
+        tss_ret = Esys_TR_FromTPMPublic(esys_ctx, AIK_NV_HANDLE, ESYS_TR_NONE,
+                                        ESYS_TR_NONE, ESYS_TR_NONE, &aik);
+        if (tss_ret != TSS2_RC_SUCCESS){
+            fprintf(stderr, "Error: Esys_TR_FromTPMPublic() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
 
-    /* Read public AIK and its name from NV handle */
-    tss_ret = Esys_TR_FromTPMPublic(esys_ctx, AIK_NV_HANDLE, ESYS_TR_NONE,
-                                    ESYS_TR_NONE, ESYS_TR_NONE, &aik);
-    if (tss_ret != TSS2_RC_SUCCESS){
-        fprintf(stderr, "Error: Esys_TR_FromTPMPublic() %s\n",
-                Tss2_RC_Decode(tss_ret));
-        goto error;
-    }
-
-    tss_ret = Esys_ReadPublic(esys_ctx, aik, ESYS_TR_NONE, ESYS_TR_NONE,
-                              ESYS_TR_NONE, &keyPublic, &name, NULL);
-    if (tss_ret != TSS2_RC_SUCCESS) {
-        fprintf(stderr, "Error: Esys_ReadPublic() %s\n",
-                Tss2_RC_Decode(tss_ret));
-        goto error;
+        tss_ret = Esys_ReadPublic(esys_ctx, aik, ESYS_TR_NONE, ESYS_TR_NONE,
+                                  ESYS_TR_NONE, &keyPublic, NULL, NULL);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            fprintf(stderr, "Error: Esys_ReadPublic() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
     }
 
     hexdump(keyPublic, sizeof(*keyPublic));
@@ -603,10 +597,6 @@ void tpm_cleanup(void)
     memset(keyPublic, 0, sizeof(*keyPublic));
     Esys_Free(keyPublic);
     keyPublic = NULL;
-
-    memset(name, 0, sizeof(*name));
-    Esys_Free(name);
-    name = NULL;
 
     /* All handles should be already flushed, this will print all missed ones */
     flush_tpm_contexts(esys_ctx, TPM2_HMAC_SESSION_FIRST);
