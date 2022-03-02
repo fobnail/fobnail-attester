@@ -201,7 +201,7 @@ static TSS2_RC start_policy_auth(ESYS_TR *session)
     return TSS2_RC_SUCCESS;
 }
 
-static UsefulBuf read_ek_cert(void)
+UsefulBuf read_ek_cert(void)
 {
     UsefulBuf             ret = NULLUsefulBuf;
     TSS2_RC               tss_ret;
@@ -306,90 +306,7 @@ error:
     return ret;
 }
 
-UsefulBuf encode_ek(void)
-{
-    UsefulBuf ek_cert = read_ek_cert();
-
-    if (UsefulBuf_IsNULLOrEmpty(ek_cert))
-        fprintf(stderr,
-                "EK certificate can't be read, is this simulated TPM?\n");
-
-    return ek_cert;
-}
-
-static UsefulBuf _encode_aik(UsefulBuf buf, UsefulBuf lkn)
-{
-    /* From TCG Trusted Platform Module Library Part 2: Structures rev 01.59:
-     *   A TPM (...) supporting RSA shall support two primes and an exponent of
-     *   zero. An exponent of zero indicates that the exponent is the default of
-     *   2^16 + 1. Support for other values is optional.
-     */
-    uint32_t exponent = keyPublic->publicArea.parameters.rsaDetail.exponent;
-    if (exponent == 0)
-        exponent = 0x00010001;
-
-    TPM2B_PUBLIC_KEY_RSA *unique = (TPM2B_PUBLIC_KEY_RSA *)
-                                   &keyPublic->publicArea.unique;
-    UsefulBufC modulus = {&unique->buffer, unique->size};
-
-   /* Set up the encoding context with the output buffer */
-    QCBOREncodeContext ctx;
-    QCBOREncode_Init(&ctx, buf);
-
-    /* Proceed to output all the items, letting the internal error
-     * tracking do its work */
-    QCBOREncode_OpenMap(&ctx);
-        QCBOREncode_AddUInt64ToMap(&ctx, "type", 1);     /* Assume RSA */
-        QCBOREncode_OpenMapInMap(&ctx, "key");
-            QCBOREncode_AddBytesToMap(&ctx, "n", modulus);
-            QCBOREncode_AddUInt64ToMap(&ctx, "e", exponent);
-        QCBOREncode_CloseMap(&ctx);
-        QCBOREncode_AddBytesToMap(&ctx, "loaded_key_name",
-                                  UsefulBuf_Const(lkn));
-    QCBOREncode_CloseMap(&ctx);
-
-    /* Get the pointer and length of the encoded output. If there was
-     * any encoding error, it will be returned here */
-    UsefulBufC EncodedCBOR;
-    QCBORError uErr;
-    uErr = QCBOREncode_Finish(&ctx, &EncodedCBOR);
-    if (uErr != QCBOR_SUCCESS) {
-        fprintf(stderr, "QCBOR error: %d\n", uErr);
-        return NULLUsefulBuf;
-    } else {
-        return UsefulBuf_Unconst(EncodedCBOR);
-    }
-}
-
-UsefulBuf encode_aik(void)
-{
-    UsefulBuf       ret = NULLUsefulBuf;
-    UsefulBuf       lkn;
-
-    if (name == NULL) {
-        fprintf(stderr, "Couldn't read AIK loaded key name\n");
-        return NULLUsefulBuf;
-    }
-
-    lkn.ptr = name->name;
-    lkn.len = name->size;
-
-    /* First call obtains the size of required output buffer, second call
-     * actually encodes data.
-     *
-     * There is also QCBOREncode_FinishGetSize(), but it internally calls
-     * QCBOREncode_Finish(). We need properly allocated buffer passed to
-     * QCBOREncode_Init() so we would have to call it twice anyway.
-     */
-    ret = _encode_aik(SizeCalculateUsefulBuf, lkn);
-
-    ret.ptr = malloc(ret.len);
-    ret = _encode_aik(ret, lkn);
-
-    return ret;
-}
-
-UsefulBuf encode_aik_marshaled(void)
+UsefulBuf get_aik(void)
 {
     UsefulBuf   marshaled;
     size_t      offset = 0;
