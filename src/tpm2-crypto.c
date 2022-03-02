@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <string.h>
-#include <ctype.h>      // isprint, for hexdump
 #include <openssl/evp.h>
 #include <tss2/tss2_rc.h>
 #include <tss2/tss2_esys.h>
@@ -98,52 +97,6 @@ static const TPM2B_PUBLIC keyTemplate = {
 #define AIK_NV_HANDLE       0x8100F0BA
 #define EK_NV_HANDLE        0x8100F0BE
 #define EK_CERT_NV_HANDLE   0x01C00002
-
-void hexdump(const void *memory, size_t length);
-void hexdump(const void *memory, size_t length)
-{
-	size_t i, j;
-	uint8_t *line;
-	int all_zero = 0;
-	int all_one = 0;
-	size_t num_bytes;
-
-	for (i = 0; i < length; i += 16) {
-		num_bytes = length - i;
-        if (num_bytes > 16) num_bytes = 16;
-		line = ((uint8_t *)memory) + i;
-
-		all_zero++;
-		all_one++;
-		for (j = 0; j < num_bytes; j++) {
-			if (line[j] != 0) {
-				all_zero = 0;
-				break;
-			}
-		}
-
-		for (j = 0; j < num_bytes; j++) {
-			if (line[j] != 0xff) {
-				all_one = 0;
-				break;
-			}
-		}
-
-		if ((all_zero < 2) && (all_one < 2)) {
-			printf("%#8lx:", i);
-			for (j = 0; j < num_bytes; j++)
-				printf(" %02x", line[j]);
-			for (; j < 16; j++)
-				printf("   ");
-			printf("  ");
-			for (j = 0; j < num_bytes; j++)
-				printf("%c", isprint(line[j]) ? line[j] : '.');
-			printf("\n");
-		} else if ((all_zero == 2) || (all_one == 2)) {
-			printf("...\n");
-		}
-	}
-}
 
 /* Release any objects of type 'hndl' that may have been allocated by commands */
 static void flush_tpm_contexts(ESYS_CONTEXT *esys_ctx, TPM2_HANDLE hndl)
@@ -297,8 +250,6 @@ UsefulBuf read_ek_cert(void)
         memcpy((uint8_t *)ret.ptr + offset, data->buffer, data->size);
         Esys_Free(data);
     }
-
-    hexdump(ret.ptr, ret.len);
 
 error:
     Esys_FlushContext(esys_ctx, session);
@@ -572,8 +523,6 @@ TSS2_RC init_tpm_keys(void)
             goto error;
         }
     }
-
-    hexdump(keyPublic, sizeof(*keyPublic));
 
     return TSS2_RC_SUCCESS;
 
