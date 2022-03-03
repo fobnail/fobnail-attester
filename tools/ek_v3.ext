@@ -1,0 +1,6 @@
+# TCG requires Authority Key ID presence
+authorityKeyIdentifier=keyid,issuer
+# CA must be FALSE for EK certificates
+basicConstraints=CA:FALSE
+# TCG requires that keyEncipherment bit is set for RSA EK certificates
+keyUsage = keyEncipherment
