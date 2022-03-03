@@ -9,7 +9,6 @@ CA_SRL=$KNC/ca.srl
 EK_PUB=$KNC/ek_pub.pem
 EK_CSR=$KNC/ek.csr
 EK_CERT=$KNC/ek_cert.der
-EK_CTX=$KNC/ek_ctx.der
 CA_CONFIG=$SCRIPT_DIR/ca.config
 EK_CONFIG=$SCRIPT_DIR/ek.config
 
@@ -65,7 +64,7 @@ fi
 
 # Create EK from seed imprinted into TPM. For TPM simulator it is randomly
 # generated at first start, don't count on it being always the same there.
-tpm2 createek --format=pem -u $EK_PUB -c $EK_CTX
+tpm2 createek --format=pem -u $EK_PUB -c /dev/null
 
 
 # Generate self-signed CA certificate
