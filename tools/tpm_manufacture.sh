@@ -11,6 +11,7 @@ EK_CSR=$KNC/ek.csr
 EK_CERT=$KNC/ek_cert.der
 CA_CONFIG=$SCRIPT_DIR/ca.config
 EK_CONFIG=$SCRIPT_DIR/ek.config
+EK_V3_EXT=$SCRIPT_DIR/ek_v3.ext
 
 
 TPM2_LOG_FILE=/tmp/tpm_manufacture.log
@@ -76,7 +77,8 @@ openssl req -newkey rsa:2048 -nodes -keyout $CA_PRIV -x509 -days 365 \
 openssl req -new -key $CA_PRIV -out $EK_CSR -config $EK_CONFIG
 openssl x509 -req -in $EK_CSR -CA $CA_CERT -CAkey $CA_PRIV -CAserial $CA_SRL \
         -force_pubkey $EK_PUB \
-        -CAcreateserial -out $EK_CERT -outform der
+        -CAcreateserial -out $EK_CERT -outform der \
+        -extfile $EK_V3_EXT
 
 # If forcing new EK certificate, undefine old one
 if [[ $FORCE -eq 1 ]]; then
