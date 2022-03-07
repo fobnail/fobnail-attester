@@ -9,6 +9,10 @@ jobs:
       - name: Check out the repo
         uses: actions/checkout@v2
 
+      - name: Checkout all submodules
+        run: |
+          git submodule update --init --recursive --checkout
+
       - name: Build
         run: |
           ./build-docker.sh
