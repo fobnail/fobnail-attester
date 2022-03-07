@@ -28,8 +28,8 @@ ip tuntap add fobnail0 mode tap user builder
 ip addr add 169.254.0.8/16 dev fobnail0
 ip link set dev fobnail0 up
 
-cat <<EOM
- _____________________________________________________________________________
+if "$INIT_TPM_SIMULATOR" = "true"; then
+  cat <<EOM
 ( =========================================================================== )
 (  Welcome to Docker TPM 2.0 Simulator Development Environment (DoTSiDE)      )
 ( =========================================================================== )
@@ -52,12 +52,13 @@ cat <<EOM
              \____\_______/
 EOM
 
-(/usr/local/bin/tpm-reset &) \
-&& echo 'Started TPM Simulator in working directory /tmp.'
-echo
+  (/usr/local/bin/tpm-reset &) \
+  && echo 'Started TPM Simulator in working directory /tmp.'
+  echo
 
-# Write EK cert into the TPM
-./tools/tpm_manufacture.sh -s -t
+  # Write EK cert into the TPM
+  ./tools/tpm_manufacture.sh -s -t
+fi
 
 # Run provided commands
 # Run shell if no commands were provided

@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+INIT_TPM_SIMULATOR=${INIT_TPM_SIMULATOR:-false}
+
 die() {
     [ $# -ne 0 ] && echo "$@"
     exit 1
@@ -46,6 +48,7 @@ docker_run() {
       -w /build \
       -e USER_ID="$(id -u)" \
       -e GROUP_ID="$(id -g)" \
+      -e INIT_TPM_SIMULATOR="$INIT_TPM_SIMULATOR" \
       --init \
       fobnail/fobnail-attester "$@"
 }
@@ -72,6 +75,9 @@ case $COMMAND in
   "run-tmux")
     [ ! -x "./bin/fobnail-attester" ] && die "./bin/fobnail-attester is not there. Run \"build-attester\" command first"
     [ ! -x "./bin/fobnail" ] && die "./bin/fobnail is not there. Run \"build-fobnail\" command first"
+
+    INIT_TPM_SIMULATOR="true"
+
     docker_run tmux \
       new-session  "./bin/fobnail-attester ; read" \; \
       split-window "./bin/fobnail ; read" \; \
