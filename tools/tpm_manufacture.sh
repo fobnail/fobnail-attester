@@ -76,9 +76,8 @@ openssl req -newkey rsa:2048 -nodes -keyout $CA_PRIV -x509 -days 365 \
 # Create and sign EK certificate
 openssl req -new -key $CA_PRIV -out $EK_CSR -config $EK_CONFIG
 openssl x509 -req -in $EK_CSR -CA $CA_CERT -CAkey $CA_PRIV -CAserial $CA_SRL \
-        -force_pubkey $EK_PUB \
-        -CAcreateserial -out $EK_CERT -outform der \
-        -extfile $EK_V3_EXT
+        -CAcreateserial -extfile $EK_V3_EXT -force_pubkey $EK_PUB \
+        -outform der -out $EK_CERT
 
 # If forcing new EK certificate, undefine old one
 if [[ $FORCE -eq 1 ]]; then
