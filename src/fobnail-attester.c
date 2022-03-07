@@ -148,7 +148,6 @@ UsefulBuf _encode_metadata(UsefulBuf Buffer, struct meta_data *meta)
         UsefulBufC mac = { meta->mac, sizeof(meta->mac) };
         QCBOREncode_AddBytesToMap(&ctx, "mac", mac);
 
-        QCBOREncode_CloseArray(&ctx);
         QCBOREncode_AddSZStringToMap(&ctx, "manufacturer",
                                      meta->manufacturer ? meta->manufacturer : "");
         QCBOREncode_AddSZStringToMap(&ctx, "product_name",

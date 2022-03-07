@@ -183,9 +183,6 @@ static int att_smbios_decode(uint8_t *buf, const char *devmem, struct meta_data 
         printf("SMBIOSv2\n");
         len = sm->sm2.len;
         // TODO: calculate checksums
-        fprintf(stderr, "Currently SMBIOSv2 is not supported yet.\n");
-        //I don't have SMBIOSv2 devices and cannot check and test it, returns -1
-        return -1;
     } else if (memcmp(sm->sm3.anchor, "_SM3_", sizeof(sm->sm3.anchor)) == 0) {
         uint8_t *p;
         struct dmi_header *hdr;
