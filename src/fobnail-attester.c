@@ -181,11 +181,48 @@ UsefulBuf encode_meta(struct meta_data *meta)
     return ret;
 }
 
+UsefulBuf _encode_signed_object(UsefulBuf Buffer, uint8_t *object, size_t len) {
+    QCBOREncodeContext ctx;
+    QCBOREncode_Init(&ctx, Buffer);
+
+    UsefulBufC data = { object, len };
+    // TODO: sign data using AIK
+    UsefulBufC signature = { NULL, 0 };
+
+    QCBOREncode_OpenMap(&ctx);
+        QCBOREncode_AddBytesToMap(&ctx, "data", data);
+        QCBOREncode_AddBytesToMap(&ctx, "signature", signature);
+    QCBOREncode_CloseMap(&ctx);
+
+    UsefulBufC EncodedCBOR;
+    QCBORError uErr;
+    uErr = QCBOREncode_Finish(&ctx, &EncodedCBOR);
+
+    if(uErr != QCBOR_SUCCESS) {
+        fprintf(stderr, "QCBOR error: %d\n", uErr);
+        return NULLUsefulBuf;
+    } else {
+        return UsefulBuf_Unconst(EncodedCBOR);
+    }
+}
+
+UsefulBuf encode_signed_object(uint8_t *object, size_t len) {
+    UsefulBuf ret = NULLUsefulBuf;
+
+    //TODO: Error handling?
+    ret = _encode_signed_object(SizeCalculateUsefulBuf, object, len);
+    ret.ptr = malloc(ret.len);
+    ret = _encode_signed_object(ret, object, len);
+
+    return ret;
+}
+
 static void coap_metadata_handler(struct coap_resource_t* resource, struct coap_session_t* session,
                                   const struct coap_pdu_t* in, const struct coap_string_t* query,
                                   struct coap_pdu_t* out)
 {
     int ret;
+    UsefulBuf ub_meta;
     UsefulBuf ub;
     struct meta_data meta;
     printf("Received message: %s\n", coap_get_uri_path(in)->s);
@@ -198,14 +235,22 @@ static void coap_metadata_handler(struct coap_resource_t* resource, struct coap_
         return;
     }
 
-    ub = encode_meta(&meta);
+    ub_meta = encode_meta(&meta);
 
     free_null_ptr(meta.manufacturer);
     free_null_ptr(meta.product_name);
     free_null_ptr(meta.serial_number);
 
-    if (UsefulBuf_IsNULLOrEmpty(ub)) {
+    if (UsefulBuf_IsNULLOrEmpty(ub_meta)) {
         fprintf(stderr, "Error: cannot encode meta information into CBOR\n");
+        quit = -1;
+        return;
+    }
+
+    ub = encode_signed_object(ub_meta.ptr, ub_meta.len);
+    free(ub_meta.ptr);
+    if (UsefulBuf_IsNULLOrEmpty(ub)) {
+        fprintf(stderr, "Error: failed to sign metadata\n");
         quit = -1;
         return;
     }
