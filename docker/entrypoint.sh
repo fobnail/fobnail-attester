@@ -56,8 +56,11 @@ EOM
   && echo 'Started TPM Simulator in working directory /tmp.'
   echo
 
+  # TODO: This should be also executed for physical TPM, when it is used
+  # instead of the simulator. Running with physical TPM is not supported by
+  # this environment presently.
   # Write EK cert into the TPM
-  ./tools/tpm_manufacture.sh -s -t
+  ./tools/tpm_manufacture.sh -t
 fi
 
 # Run provided commands
