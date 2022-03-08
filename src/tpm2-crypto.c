@@ -381,6 +381,121 @@ error:
     return ret;
 }
 
+/* Return just the signature, doesn't destroy data */
+UsefulBuf sign_with_aik(UsefulBufC data)
+{
+    UsefulBuf               ret = NULLUsefulBuf;
+    TSS2_RC                 tss_ret;
+    TPM2B_MAX_BUFFER        buf = { .size = TPM2_MAX_DIGEST_BUFFER };  // 1024
+    ESYS_TR                 handle, session = ESYS_TR_NONE;
+    size_t                  left = data.len;
+    TPMT_TK_HASHCHECK      *ticket = NULL;
+    TPM2B_DIGEST           *digest = NULL;
+    TPMT_SIGNATURE         *signature = NULL;
+    TPM2B_AUTH              null_auth = { .size = 0 };
+    TPMT_SIG_SCHEME         sig_scheme =
+                            {
+                                .scheme = TPM2_ALG_RSASSA,
+                                .details.rsassa.hashAlg = TPM2_ALG_SHA256
+                            };
+
+    tss_ret = Esys_StartAuthSession(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                                    &nonceCaller, TPM2_SE_POLICY, &sym_null,
+                                    TPM2_ALG_SHA256, &session);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        fprintf(stderr, "Error: Esys_StartAuthSession() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    /* TPM may refuse to sign unless it calculates hash value by itself */
+    if (data.len <= TPM2_MAX_DIGEST_BUFFER) {
+        buf.size = data.len;
+        memcpy(buf.buffer, data.ptr, data.len);
+        tss_ret = Esys_Hash(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                            &buf, TPM2_ALG_SHA256, ESYS_TR_RH_OWNER, &digest,
+                            &ticket);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            fprintf(stderr, "Error: Esys_Hash() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+    } else {
+        tss_ret = Esys_HashSequenceStart(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                                         ESYS_TR_NONE, &null_auth,
+                                         TPM2_ALG_SHA256, &handle);
+        if (tss_ret != TSS2_RC_SUCCESS){
+            fprintf(stderr, "Error: Esys_HashSequenceStart() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+
+        tss_ret = Esys_TR_SetAuth(esys_ctx, handle, &null_auth);
+        if (tss_ret != TSS2_RC_SUCCESS){
+            fprintf(stderr, "Error: Esys_TR_SetAuth() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+
+        while (left > TPM2_MAX_DIGEST_BUFFER) {
+            memcpy(buf.buffer, (uint8_t *) data.ptr + (data.len - left),
+                   TPM2_MAX_DIGEST_BUFFER);
+            tss_ret = Esys_SequenceUpdate(esys_ctx, handle, ESYS_TR_NONE,
+                                          ESYS_TR_NONE, ESYS_TR_NONE, &buf);
+            if (tss_ret != TSS2_RC_SUCCESS){
+                fprintf(stderr, "Error: Esys_SequenceUpdate() %s\n",
+                        Tss2_RC_Decode(tss_ret));
+                goto error;
+            }
+            left -= TPM2_MAX_DIGEST_BUFFER;
+        }
+
+        memcpy(buf.buffer, (uint8_t *) data.ptr + (data.len - left), left);
+        buf.size = left;
+
+        /* 'handle' is flushed by this function */
+        tss_ret = Esys_SequenceComplete(esys_ctx, handle, ESYS_TR_PASSWORD,
+                                        ESYS_TR_NONE, ESYS_TR_NONE, &buf,
+                                        ESYS_TR_RH_OWNER, &digest, &ticket);
+        if (tss_ret != TSS2_RC_SUCCESS){
+            fprintf(stderr, "Error: Esys_SequenceComplete() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+    }
+
+    tss_ret = Esys_TR_FromTPMPublic(esys_ctx, AIK_NV_HANDLE, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, &handle);
+    if (tss_ret != TSS2_RC_SUCCESS){
+        fprintf(stderr, "Error: Esys_TR_FromTPMPublic() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    tss_ret = Esys_Sign(esys_ctx, handle, ESYS_TR_PASSWORD, ESYS_TR_NONE,
+                        ESYS_TR_NONE, digest, &sig_scheme, ticket, &signature);
+    if (tss_ret != TSS2_RC_SUCCESS){
+        fprintf(stderr, "Error: Esys_Sign() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    ret.ptr = malloc(signature->signature.rsassa.sig.size);
+    ret.len = signature->signature.rsassa.sig.size;
+    memcpy(ret.ptr, signature->signature.rsassa.sig.buffer, ret.len);
+
+error:
+    if(session != TPM2_RH_NULL)
+        Esys_FlushContext(esys_ctx, session);
+
+    Esys_Free(ticket);
+    Esys_Free(digest);
+    Esys_Free(signature);
+
+    return ret;
+}
+
 TSS2_RC init_tpm_keys(void)
 {
     TSS2_RC                tss_ret = TSS2_RC_SUCCESS;

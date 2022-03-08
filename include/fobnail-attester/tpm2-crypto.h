@@ -9,5 +9,6 @@ void tpm_cleanup(void);
 UsefulBuf read_ek_cert(void);
 UsefulBuf get_aik(void);
 UsefulBuf do_challenge(UsefulBuf in);
+UsefulBuf sign_with_aik(UsefulBufC data);
 
 #endif /* _H_TPM2_CRYPTO */
