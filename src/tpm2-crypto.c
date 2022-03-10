@@ -382,7 +382,7 @@ error:
 }
 
 /* Return just the signature, doesn't destroy data */
-UsefulBuf sign_with_aik(UsefulBufC data)
+static UsefulBuf sign_with_aik(UsefulBuf data)
 {
     UsefulBuf               ret = NULLUsefulBuf;
     TSS2_RC                 tss_ret;
@@ -492,6 +492,181 @@ error:
     Esys_Free(ticket);
     Esys_Free(digest);
     Esys_Free(signature);
+
+    return ret;
+}
+
+static UsefulBuf concat_data_sign(UsefulBuf data, UsefulBuf sign, UsefulBuf buf)
+{
+    QCBOREncodeContext ctx;
+    UsefulBufC EncodedCBOR;
+    QCBORError uErr;
+
+    QCBOREncode_Init(&ctx, buf);
+
+    QCBOREncode_OpenMap(&ctx);
+        QCBOREncode_AddBytesToMap(&ctx, "data", UsefulBuf_Const(data));
+        QCBOREncode_AddBytesToMap(&ctx, "signature", UsefulBuf_Const(sign));
+    QCBOREncode_CloseMap(&ctx);
+
+    uErr = QCBOREncode_Finish(&ctx, &EncodedCBOR);
+    if(uErr != QCBOR_SUCCESS) {
+        printf("QCBOR error: %d\n", uErr);
+        return NULLUsefulBuf;
+    } else {
+        return UsefulBuf_Unconst(EncodedCBOR);
+    }
+}
+
+static UsefulBuf get_pcr_assertions(uint32_t pcrs)
+{
+    UsefulBuf           ret = SizeCalculateUsefulBuf;
+    TSS2_RC             tss_ret;
+    TPML_PCR_SELECTION *pcr_sel_out = NULL;
+    UINT32              pcr_update_ctr;
+    TPML_DIGEST        *pcr_vals = NULL;
+    /* TODO: read available PCR banks with GetCapabilities() */
+    TPML_PCR_SELECTION  pcr_sel =
+    {
+        .count = 1,
+        .pcrSelections =
+        {
+            /* Skipped to save space in TPML_DIGEST
+            {
+                .hash = TPM2_ALG_SHA1,
+                .sizeofSelect = 3,
+                .pcrSelect =
+                {
+                    (pcrs >>  0) & 0xFF,
+                    (pcrs >>  8) & 0xFF,
+                    (pcrs >> 16) & 0xFF,
+                }
+            },
+            */
+            {
+                .hash = TPM2_ALG_SHA256,
+                .sizeofSelect = 3,
+                .pcrSelect =
+                {
+                    (pcrs >>  0) & 0xFF,
+                    (pcrs >>  8) & 0xFF,
+                    (pcrs >> 16) & 0xFF,
+                }
+            },
+        }
+    };
+
+    if (__builtin_popcount(pcrs) == 0) {
+        fprintf(stderr, "Error: No PCRs selected\n");
+        goto error;
+    }
+
+    /*
+     * Limit comes from TPML_DIGEST
+     *
+     * It is possible to pass more to TPM2_PCR_Read() command and it will
+     * succeed, but it will only return some of PCR values.
+     */
+    if (__builtin_popcount(pcrs) / pcr_sel.count > 8) {
+        fprintf(stderr, "Error: Too many PCRs requested at once\n");
+        goto error;
+    }
+
+    tss_ret = Esys_PCR_Read(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                            &pcr_sel, &pcr_update_ctr, &pcr_sel_out, &pcr_vals);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        fprintf(stderr, "Error: Esys_PCR_Read() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    /*
+     * TODO: if needed, Esys_PCR_Read() can be called again with modified
+     * PCR selection until all requested PCRs are read. TPML_DIGEST can hold
+     * only 8 hashes so another buffer would be required. This would not comply
+     * with RIM specification, but spec wants to somehow fit 16+ hashes where
+     * it only has place for 8.
+     *
+     * Tss2_MU_TPML_DIGEST_Marshal() has internal check for 'count' field so it
+     * can't be used on unbounded version of TPML_DIGEST.
+     */
+    if (memcmp(&pcr_sel, pcr_sel_out, sizeof(TPML_PCR_SELECTION)) != 0) {
+        fprintf(stderr, "Error: Not all requested PCR values were read\n");
+        goto error;
+    }
+
+    /* First pass calculates size, second pass does the marshaling */
+    for (int i = 0; i < 2; i++) {
+        size_t offset = 0;
+
+        /*
+         * This assumes that marshaling can't fail in second pass if it didn't
+         * in the first one
+         */
+        tss_ret = Tss2_MU_UINT32_Marshal(pcr_update_ctr, ret.ptr, ret.len,
+                                         &offset);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            fprintf(stderr, "Error: Tss2_MU_UINT32_Marshal() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+
+        tss_ret = Tss2_MU_TPML_PCR_SELECTION_Marshal(pcr_sel_out, ret.ptr,
+                                                     ret.len, &offset);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            fprintf(stderr, "Error: Tss2_MU_TPML_PCR_SELECTION_Marshal() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+
+        tss_ret = Tss2_MU_TPML_DIGEST_Marshal(pcr_vals, ret.ptr, ret.len,
+                                              &offset);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            fprintf(stderr, "Error: Tss2_MU_TPML_DIGEST_Marshal() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+
+        if (UsefulBuf_IsNULLOrEmpty(ret)) {
+            ret.ptr = malloc(offset);
+            ret.len = offset;
+        }
+    }
+
+error:
+    Esys_Free(pcr_sel_out);
+    Esys_Free(pcr_vals);
+
+    return ret;
+}
+
+UsefulBuf get_signed_rim(uint32_t pcrs)
+{
+    UsefulBuf   ret = NULLUsefulBuf;
+    UsefulBuf   data = NULLUsefulBuf;
+    UsefulBuf   signature = NULLUsefulBuf;
+
+    data = get_pcr_assertions(pcrs);
+    if (UsefulBuf_IsNULLOrEmpty(data)) {
+        fprintf(stderr, "Empty PCR assertions\n");
+        goto error;
+    }
+
+    signature = sign_with_aik(data);
+    if (UsefulBuf_IsNULLOrEmpty(data)) {
+        fprintf(stderr, "Couldn't sign RIM\n");
+        goto error;
+    }
+
+    ret = concat_data_sign(data, signature, SizeCalculateUsefulBuf);
+    ret.ptr = malloc(ret.len);
+    ret = concat_data_sign(data, signature, ret);
+
+error:
+    if (data.ptr)
+        free(data.ptr);
+    if (signature.ptr)
+        free(signature.ptr);
 
     return ret;
 }

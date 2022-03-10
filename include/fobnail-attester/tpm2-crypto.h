@@ -8,7 +8,7 @@ void tpm_cleanup(void);
 
 UsefulBuf read_ek_cert(void);
 UsefulBuf get_aik(void);
+UsefulBuf get_signed_rim(uint32_t pcrs);
 UsefulBuf do_challenge(UsefulBuf in);
-UsefulBuf sign_with_aik(UsefulBufC data);
 
 #endif /* _H_TPM2_CRYPTO */
