@@ -441,11 +441,22 @@ static UsefulBuf sign_with_aik(UsefulBuf data)
         while (left > TPM2_MAX_DIGEST_BUFFER) {
             memcpy(buf.buffer, (uint8_t *) data.ptr + (data.len - left),
                    TPM2_MAX_DIGEST_BUFFER);
-            tss_ret = Esys_SequenceUpdate(esys_ctx, handle, ESYS_TR_NONE,
+            tss_ret = Esys_SequenceUpdate(esys_ctx, handle, ESYS_TR_PASSWORD,
                                           ESYS_TR_NONE, ESYS_TR_NONE, &buf);
             if (tss_ret != TSS2_RC_SUCCESS){
                 fprintf(stderr, "Error: Esys_SequenceUpdate() %s\n",
                         Tss2_RC_Decode(tss_ret));
+                /*
+                 * Can't just 'goto error;', handle must be released and the
+                 * only way to do so for sequence handles is through
+                 * Esys_SequenceComplete(). Call this function with empty buffer
+                 * and don't bother checking its result, this is already failed
+                 * case.
+                 */
+                buf.size = 0;
+                Esys_SequenceComplete(esys_ctx, handle, ESYS_TR_PASSWORD,
+                                      ESYS_TR_NONE, ESYS_TR_NONE, &buf,
+                                      ESYS_TR_RH_OWNER, &digest, &ticket);
                 goto error;
             }
             left -= TPM2_MAX_DIGEST_BUFFER;
