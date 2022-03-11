@@ -518,6 +518,125 @@ static UsefulBuf concat_data_sign(UsefulBuf data, UsefulBuf sign, UsefulBuf buf)
     }
 }
 
+static unsigned get_num_of_digests(TPML_PCR_SELECTION const *sel)
+{
+    unsigned num = 0;
+
+    for (unsigned i = 0; i < sel->count; i++) {
+        uint32_t pcrs = (sel->pcrSelections[i].pcrSelect[0] <<  0) |
+                        (sel->pcrSelections[i].pcrSelect[1] <<  8) |
+                        (sel->pcrSelections[i].pcrSelect[2] << 16);
+        num += __builtin_popcount(pcrs);
+    }
+
+    return num;
+}
+
+/*
+ * Expanded Tss2_MU_TPML_DIGEST_Marshal with removed debug output and tests for
+ * src->size value.
+ */
+TSS2_RC TPML_DIGEST_Marshal_unbounded(TPML_DIGEST const *src, uint8_t buffer[],
+                                      size_t buffer_size, size_t *offset)
+{
+    size_t  local_offset = 0;
+    UINT32 i, count = 0;
+    TSS2_RC ret = TSS2_RC_SUCCESS;
+
+    if (offset != NULL) {
+        local_offset = *offset;
+    }
+
+    if (src == NULL) {
+        return TSS2_MU_RC_BAD_REFERENCE;
+    }
+
+    if (buffer == NULL && offset == NULL) {
+        return TSS2_MU_RC_BAD_REFERENCE;
+    } else if (buffer_size < local_offset ||
+               buffer_size - local_offset < sizeof(count)) {
+        return TSS2_MU_RC_INSUFFICIENT_BUFFER;
+    }
+
+    /* This is why Tss2_MU_TPML_DIGEST_Marshal() can't be used */
+    /*
+    if (src->count > TAB_SIZE(src->buf_name)) {
+        return TSS2_SYS_RC_BAD_VALUE;
+    }
+    */
+
+    ret = Tss2_MU_UINT32_Marshal(src->count, buffer, buffer_size,
+                                 &local_offset);
+    if (ret)
+        return ret;
+
+    for (i = 0; i < src->count; i++)
+    {
+        ret = Tss2_MU_TPM2B_DIGEST_Marshal(&src->digests[i], buffer,
+                                           buffer_size, &local_offset);
+        if (ret)
+            return ret;
+    }
+    if (offset != NULL) {
+        *offset = local_offset;
+    }
+
+    return TSS2_RC_SUCCESS;
+}
+
+static void update_pcr_selection(TPML_PCR_SELECTION *base,
+                                 TPML_PCR_SELECTION const *done)
+{
+    /* Iterate over 'done', it's either smaller or same size as `base` */
+    for (unsigned i = 0; i < done->count; i++) {
+        TPMS_PCR_SELECTION const *it_done = &done->pcrSelections[i];
+        TPMS_PCR_SELECTION *it_base = NULL;
+        unsigned            smaller = 0;
+
+        /*
+         * According to TPM2 library specification, PCR_Read() should return
+         * selector for the bank even when no PCRs are returned for it and
+         * return PCR selections in order, so these indices should be the same.
+         * In case they aren't, iterate over all selections and compare hash
+         * IDs.
+         */
+        if (it_done->hash == base->pcrSelections[i].hash) {
+            it_base = &base->pcrSelections[i];
+        } else {
+            fprintf(stderr, "Warning: different order of PCR selections."
+                    " This does not comply with specification.\n");
+            for (unsigned j = 0; j < base->count; j++) {
+                if (it_done->hash == base->pcrSelections[j].hash) {
+                    it_base = &base->pcrSelections[j];
+                    break;
+                }
+            }
+
+            if (it_base == NULL) {
+                fprintf(stderr, "Error: Cannot remove PCRs for hash ID = %04x,"
+                        " no such ID found in base selection\n", it_done->hash);
+                /*
+                 * Skip this and try other selections. If there were any PCRs
+                 * for this algorithm, total number of returned digests won't
+                 * match expected value and an error will be returned later.
+                 */
+                continue;
+            }
+        }
+
+        /* Not sure if they are always equal, doing it safely */
+        smaller = it_done->sizeofSelect > it_base->sizeofSelect ?
+                  it_base->sizeofSelect : it_done->sizeofSelect;
+
+        /*
+         * Doing XOR instead of masking so bad values returned by TPM are
+         * caught when checking number of hashes left after final PCR_Read().
+         */
+        for (unsigned j = 0; j < smaller; j++)
+            it_base->pcrSelect[j] ^= it_done->pcrSelect[j];
+    }
+}
+
 static UsefulBuf get_pcr_assertions(uint32_t pcrs)
 {
     UsefulBuf           ret = SizeCalculateUsefulBuf;
@@ -525,6 +644,17 @@ static UsefulBuf get_pcr_assertions(uint32_t pcrs)
     TPML_PCR_SELECTION *pcr_sel_out = NULL;
     UINT32              pcr_update_ctr;
     TPML_DIGEST        *pcr_vals = NULL;
+    /*
+     * TPML_DIGEST only has place for 8 digests. Pointer below will point to
+     * modified version that will be malloc()'ed and doesn't have this limit.
+     *
+     * Coverage tools may still complain about out-of-bounds access. If this
+     * poses an issue, new type will have to be defined just for that.
+     *
+     * Tss2_MU_TPML_DIGEST_Marshal() has internal check for 'count' field so it
+     * can't be used on unbounded version of TPML_DIGEST.
+     */
+    TPML_DIGEST        *unbounded_pcr_vals = NULL;
     /* TODO: read available PCR banks with GetCapabilities() */
     TPML_PCR_SELECTION  pcr_sel =
     {
@@ -533,7 +663,7 @@ static UsefulBuf get_pcr_assertions(uint32_t pcrs)
         {
             /* Skipped to save space in TPML_DIGEST
             {
-                .hash = TPM2_ALG_SHA1,
+                .hash = TPM2_ALG_SHA1,      // mandatory, deprecated
                 .sizeofSelect = 3,
                 .pcrSelect =
                 {
@@ -544,7 +674,7 @@ static UsefulBuf get_pcr_assertions(uint32_t pcrs)
             },
             */
             {
-                .hash = TPM2_ALG_SHA256,
+                .hash = TPM2_ALG_SHA256,    // mandatory
                 .sizeofSelect = 3,
                 .pcrSelect =
                 {
@@ -553,44 +683,71 @@ static UsefulBuf get_pcr_assertions(uint32_t pcrs)
                     (pcrs >> 16) & 0xFF,
                 }
             },
+            /* Skipped to save space in TPML_DIGEST
+            {
+                .hash = TPM2_ALG_SHA384,    // mandatory since PTP version 1.04,
+                                            // but only if TPM supports multiple
+                                            // banks of PCRs
+                .sizeofSelect = 3,
+                .pcrSelect =
+                {
+                    (pcrs >>  0) & 0xFF,
+                    (pcrs >>  8) & 0xFF,
+                    (pcrs >> 16) & 0xFF,
+                }
+            },
+            */
         }
     };
+
+    TPML_PCR_SELECTION  pcr_sel_orig = pcr_sel;
+    unsigned            num_digests = get_num_of_digests(&pcr_sel);
 
     if (__builtin_popcount(pcrs) == 0) {
         fprintf(stderr, "Error: No PCRs selected\n");
         goto error;
     }
 
-    /*
-     * Limit comes from TPML_DIGEST
-     *
-     * It is possible to pass more to TPM2_PCR_Read() command and it will
-     * succeed, but it will only return some of PCR values.
-     */
-    if (__builtin_popcount(pcrs) / pcr_sel.count > 8) {
-        fprintf(stderr, "Error: Too many PCRs requested at once\n");
-        goto error;
+    unbounded_pcr_vals = malloc(sizeof(TPML_DIGEST) - sizeof(TPM2B_DIGEST[8])
+                                + num_digests * sizeof(TPM2B_DIGEST));
+    unbounded_pcr_vals->count = num_digests;
+
+    for (unsigned dgst_offset = 0; dgst_offset < num_digests;) {
+        tss_ret = Esys_PCR_Read(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                                ESYS_TR_NONE, &pcr_sel, &pcr_update_ctr,
+                                &pcr_sel_out, &pcr_vals);
+        if (tss_ret != TSS2_RC_SUCCESS) {
+            fprintf(stderr, "Error: Esys_PCR_Read() %s\n",
+                    Tss2_RC_Decode(tss_ret));
+            goto error;
+        }
+
+        if (pcr_vals->count != get_num_of_digests(pcr_sel_out)) {
+            fprintf(stderr, "Error: returned PCR selection doesn't match number"
+                    " of digests (%d != %d)\n",
+                    get_num_of_digests(pcr_sel_out), pcr_vals->count);
+            goto error;
+        }
+
+        /* Copy returned digests to bigger buffer */
+        for (unsigned i = 0; i < pcr_vals->count; i++) {
+            memcpy(&unbounded_pcr_vals->digests[dgst_offset + i],
+                   &pcr_vals->digests[i],
+                   sizeof(TPM2B_DIGEST));
+        }
+
+        /* Remove read PCRs from PCR selection */
+        update_pcr_selection(&pcr_sel, pcr_sel_out);
+
+        dgst_offset += pcr_vals->count;
+
+        Esys_Free(pcr_sel_out);
+        pcr_sel_out = NULL;
+        Esys_Free(pcr_vals);
+        pcr_vals = NULL;
     }
 
-    tss_ret = Esys_PCR_Read(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-                            &pcr_sel, &pcr_update_ctr, &pcr_sel_out, &pcr_vals);
-    if (tss_ret != TSS2_RC_SUCCESS) {
-        fprintf(stderr, "Error: Esys_PCR_Read() %s\n",
-                Tss2_RC_Decode(tss_ret));
-        goto error;
-    }
-
-    /*
-     * TODO: if needed, Esys_PCR_Read() can be called again with modified
-     * PCR selection until all requested PCRs are read. TPML_DIGEST can hold
-     * only 8 hashes so another buffer would be required. This would not comply
-     * with RIM specification, but spec wants to somehow fit 16+ hashes where
-     * it only has place for 8.
-     *
-     * Tss2_MU_TPML_DIGEST_Marshal() has internal check for 'count' field so it
-     * can't be used on unbounded version of TPML_DIGEST.
-     */
-    if (memcmp(&pcr_sel, pcr_sel_out, sizeof(TPML_PCR_SELECTION)) != 0) {
+    if (get_num_of_digests(&pcr_sel) != 0) {
         fprintf(stderr, "Error: Not all requested PCR values were read\n");
         goto error;
     }
@@ -611,7 +768,7 @@ static UsefulBuf get_pcr_assertions(uint32_t pcrs)
             goto error;
         }
 
-        tss_ret = Tss2_MU_TPML_PCR_SELECTION_Marshal(pcr_sel_out, ret.ptr,
+        tss_ret = Tss2_MU_TPML_PCR_SELECTION_Marshal(&pcr_sel_orig, ret.ptr,
                                                      ret.len, &offset);
         if (tss_ret != TSS2_RC_SUCCESS) {
             fprintf(stderr, "Error: Tss2_MU_TPML_PCR_SELECTION_Marshal() %s\n",
@@ -619,8 +776,8 @@ static UsefulBuf get_pcr_assertions(uint32_t pcrs)
             goto error;
         }
 
-        tss_ret = Tss2_MU_TPML_DIGEST_Marshal(pcr_vals, ret.ptr, ret.len,
-                                              &offset);
+        tss_ret = TPML_DIGEST_Marshal_unbounded(unbounded_pcr_vals, ret.ptr,
+                                                ret.len, &offset);
         if (tss_ret != TSS2_RC_SUCCESS) {
             fprintf(stderr, "Error: Tss2_MU_TPML_DIGEST_Marshal() %s\n",
                     Tss2_RC_Decode(tss_ret));
@@ -636,6 +793,9 @@ static UsefulBuf get_pcr_assertions(uint32_t pcrs)
 error:
     Esys_Free(pcr_sel_out);
     Esys_Free(pcr_vals);
+
+    if (unbounded_pcr_vals != NULL)
+        free(unbounded_pcr_vals);
 
     return ret;
 }

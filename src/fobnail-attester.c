@@ -282,7 +282,7 @@ static void coap_rim_handler(struct coap_resource_t* resource, struct coap_sessi
     printf("Received message: %s\n", coap_get_uri_path(in)->s);
 
     /* TODO: maybe make it parameterized at COAP level? */
-    UsefulBuf ub = get_signed_rim(0xFF);
+    UsefulBuf ub = get_signed_rim(0xFFFFFF);
     if (UsefulBuf_IsNULLOrEmpty(ub)) {
         fprintf(stderr, "Error: cannot obtain RIM\n");
         /* We probably should mention the error in response */
