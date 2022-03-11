@@ -382,7 +382,7 @@ error:
 }
 
 /* Return just the signature, doesn't destroy data */
-static UsefulBuf sign_with_aik(UsefulBuf data)
+static UsefulBuf get_aik_signature(UsefulBuf data)
 {
     UsefulBuf               ret = NULLUsefulBuf;
     TSS2_RC                 tss_ret;
@@ -527,6 +527,28 @@ static UsefulBuf concat_data_sign(UsefulBuf data, UsefulBuf sign, UsefulBuf buf)
     } else {
         return UsefulBuf_Unconst(EncodedCBOR);
     }
+}
+
+UsefulBuf sign_with_aik(UsefulBuf data)
+{
+    UsefulBuf   ret = NULLUsefulBuf;
+    UsefulBuf   signature = NULLUsefulBuf;
+
+    signature = get_aik_signature(data);
+    if (UsefulBuf_IsNULLOrEmpty(data)) {
+        fprintf(stderr, "Couldn't create signature with AIK\n");
+        goto error;
+    }
+
+    ret = concat_data_sign(data, signature, SizeCalculateUsefulBuf);
+    ret.ptr = malloc(ret.len);
+    ret = concat_data_sign(data, signature, ret);
+
+error:
+    if (signature.ptr)
+        free(signature.ptr);
+
+    return ret;
 }
 
 static unsigned get_num_of_digests(TPML_PCR_SELECTION const *sel)
@@ -815,7 +837,6 @@ UsefulBuf get_signed_rim(uint32_t pcrs)
 {
     UsefulBuf   ret = NULLUsefulBuf;
     UsefulBuf   data = NULLUsefulBuf;
-    UsefulBuf   signature = NULLUsefulBuf;
 
     data = get_pcr_assertions(pcrs);
     if (UsefulBuf_IsNULLOrEmpty(data)) {
@@ -823,21 +844,15 @@ UsefulBuf get_signed_rim(uint32_t pcrs)
         goto error;
     }
 
-    signature = sign_with_aik(data);
+    ret = sign_with_aik(data);
     if (UsefulBuf_IsNULLOrEmpty(data)) {
         fprintf(stderr, "Couldn't sign RIM\n");
         goto error;
     }
 
-    ret = concat_data_sign(data, signature, SizeCalculateUsefulBuf);
-    ret.ptr = malloc(ret.len);
-    ret = concat_data_sign(data, signature, ret);
-
 error:
     if (data.ptr)
         free(data.ptr);
-    if (signature.ptr)
-        free(signature.ptr);
 
     return ret;
 }

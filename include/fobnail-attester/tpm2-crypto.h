@@ -10,5 +10,6 @@ UsefulBuf read_ek_cert(void);
 UsefulBuf get_aik(void);
 UsefulBuf get_signed_rim(uint32_t pcrs);
 UsefulBuf do_challenge(UsefulBuf in);
+UsefulBuf sign_with_aik(UsefulBuf data);
 
 #endif /* _H_TPM2_CRYPTO */
