@@ -6,11 +6,11 @@
 /* Structure for meta data for provisioning and attestation */
 struct meta_data {
     uint8_t     header_version;
-    uint8_t     mac[6];         /* MAC address */
+    uint8_t     mac[6];               /* MAC address */
     char        *serial_number;       /* Serial number */
     char        *manufacturer;
     char        *product_name;
-} __attribute__((packed));
+};
 
 #define META_H_VERSION  1
 
@@ -22,7 +22,7 @@ struct dmi_header {
     uint8_t  type;
     uint8_t  length;
     uint16_t handle;
-    uint8_t  *data;
+    uint8_t  data[];
 };
 
 struct sm2_t {
@@ -60,10 +60,10 @@ union sm_t {
     struct sm3_t sm3;
 };
 
-#define MRF_OFFSET  0x4
-#define PN_OFFSET   0x5
-#define SN_OFFSET   0x7
-
+#define SYS_INFO_TYPE       1
+#define MRF_OFFSET          0
+#define PN_OFFSET           1
+#define SN_OFFSET           3
 
 int get_meta_data(struct meta_data *meta);
 int get_dmi_system_info(struct meta_data *meta);

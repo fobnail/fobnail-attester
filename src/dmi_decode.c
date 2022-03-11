@@ -104,7 +104,7 @@ static void ascii_filter(char *bp, size_t len)
 
 static char *_dmi_string(const struct dmi_header *dm, uint8_t s, int filter)
 {
-    char *bp = (char *)dm->data;
+    char *bp = (char *)dm;
 
     bp += dm->length;
     while (s > 1 && *bp) {
@@ -176,6 +176,9 @@ static int dmi_info_to_meta(struct dmi_header *h, struct meta_data *meta)
 static int att_smbios_decode(uint8_t *buf, const char *devmem, struct meta_data *meta)
 {
     size_t len;
+    ssize_t slen;
+    uint8_t *p;
+    struct dmi_header *hdr;
     uint8_t *dmi_buf = NULL;
     union sm_t *sm = (union sm_t *)buf;
 
@@ -184,40 +187,51 @@ static int att_smbios_decode(uint8_t *buf, const char *devmem, struct meta_data 
         len = sm->sm2.len;
         // TODO: calculate checksums
     } else if (memcmp(sm->sm3.anchor, "_SM3_", sizeof(sm->sm3.anchor)) == 0) {
-        uint8_t *p;
-        struct dmi_header *hdr;
 
         printf("SMBIOSv3: len = %d\n", sm->sm3.len);
         len = sm->sm3.len;
         // TODO: calculate checksum
-
-        dmi_buf = read_file(0, &len, devmem);
-        if (dmi_buf == NULL)
-            return -1;
-
-        hdr = (struct dmi_header *)dmi_buf;
-        p = dmi_buf + hdr->length;  /* points to data for SMBIOS Structure Type 0 */
-
-        while (*p != 0 || *(p + 1) != 0) /* Skip data for Type 0*/
-            p++;
-
-        hdr = (struct dmi_header *)(p + 2);
-        hdr->data = (uint8_t *)hdr;
-
-        if (dmi_info_to_meta(hdr, meta) < 0) {
-            free_null_ptr(meta->manufacturer);
-            free_null_ptr(meta->product_name);
-            free_null_ptr(meta->serial_number);
-            free(dmi_buf);
-            return -1;
-        }
-
-        free(dmi_buf);
-        return 0;
     } else {
         printf("Unknown SMBIOS version\n");
         return -1;
     }
+
+    dmi_buf = read_file(0, &len, devmem);
+    if (dmi_buf == NULL)
+        return -1;
+
+    p = dmi_buf;
+    slen = len;
+    off_t delta;
+
+    while (slen > 0) {
+        uint8_t *c;
+        hdr = (struct dmi_header *)p;
+        delta = hdr->length;
+
+        if (hdr->type == SYS_INFO_TYPE) {
+            if (dmi_info_to_meta(hdr, meta) < 0) {
+                free_null_ptr(meta->manufacturer);
+                free_null_ptr(meta->product_name);
+                free_null_ptr(meta->serial_number);
+                free(dmi_buf);
+                return -1;
+            }
+
+            break;
+        }
+        c = p + hdr->length;
+        while (*c != 0 || *(c + 1) != 0) {
+            c++; delta++;
+        }
+        delta += 2; //exclude termitating zeros
+        slen -= delta;
+        p += delta;
+    }
+
+    free(dmi_buf);
+
+    return 0;
 }
 
 int get_dmi_system_info(struct meta_data *meta)

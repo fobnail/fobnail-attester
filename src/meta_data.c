@@ -138,7 +138,7 @@ static int get_mac_addr(uint8_t *mac)
         if (bdf.bdf_num == 0UL || bdf.bdf_num > curr_bdf) {
             bdf.bdf_num = curr_bdf;
             snprintf(bdf.iface, 32, "%s", (strrchr(link_buf, '/') + 1));
-        } 
+        }
     }
 
     free(link_buf);
