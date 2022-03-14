@@ -565,58 +565,6 @@ static unsigned get_num_of_digests(TPML_PCR_SELECTION const *sel)
     return num;
 }
 
-/*
- * Expanded Tss2_MU_TPML_DIGEST_Marshal with removed debug output and tests for
- * src->size value.
- */
-TSS2_RC TPML_DIGEST_Marshal_unbounded(TPML_DIGEST const *src, uint8_t buffer[],
-                                      size_t buffer_size, size_t *offset)
-{
-    size_t  local_offset = 0;
-    UINT32 i, count = 0;
-    TSS2_RC ret = TSS2_RC_SUCCESS;
-
-    if (offset != NULL) {
-        local_offset = *offset;
-    }
-
-    if (src == NULL) {
-        return TSS2_MU_RC_BAD_REFERENCE;
-    }
-
-    if (buffer == NULL && offset == NULL) {
-        return TSS2_MU_RC_BAD_REFERENCE;
-    } else if (buffer_size < local_offset ||
-               buffer_size - local_offset < sizeof(count)) {
-        return TSS2_MU_RC_INSUFFICIENT_BUFFER;
-    }
-
-    /* This is why Tss2_MU_TPML_DIGEST_Marshal() can't be used */
-    /*
-    if (src->count > TAB_SIZE(src->buf_name)) {
-        return TSS2_SYS_RC_BAD_VALUE;
-    }
-    */
-
-    ret = Tss2_MU_UINT32_Marshal(src->count, buffer, buffer_size,
-                                 &local_offset);
-    if (ret)
-        return ret;
-
-    for (i = 0; i < src->count; i++)
-    {
-        ret = Tss2_MU_TPM2B_DIGEST_Marshal(&src->digests[i], buffer,
-                                           buffer_size, &local_offset);
-        if (ret)
-            return ret;
-    }
-    if (offset != NULL) {
-        *offset = local_offset;
-    }
-
-    return TSS2_RC_SUCCESS;
-}
-
 static void update_pcr_selection(TPML_PCR_SELECTION *base,
                                  TPML_PCR_SELECTION const *done)
 {
@@ -670,6 +618,69 @@ static void update_pcr_selection(TPML_PCR_SELECTION *base,
     }
 }
 
+static const char *alg_name(uint16_t id)
+{
+    switch (id) {
+        case TPM2_ALG_SHA1:
+            return "sha1";
+        case TPM2_ALG_SHA256:
+            return "sha256";
+        case TPM2_ALG_SHA384:
+            return "sha384";
+        default:
+            return NULL;
+    }
+}
+
+static UsefulBuf cbor_pcr_assertions(UsefulBuf buf, uint32_t pcr_update_ctr,
+                                     TPML_DIGEST const *vals_unb,
+                                     TPML_PCR_SELECTION const *sel)
+{
+    unsigned cursor = 0;
+    QCBOREncodeContext ctx;
+    QCBOREncode_Init(&ctx, buf);
+
+    QCBOREncode_OpenMap(&ctx);
+        QCBOREncode_AddUInt64ToMap(&ctx, "update_ctr", pcr_update_ctr);
+        for (unsigned i = 0; i < sel->count; i++) {
+            const char *alg = alg_name(sel->pcrSelections[i].hash);
+
+            /*
+             * Different banks may implement different sets of PCRs. Right now
+             * this is not supported by attester (test in get_pcr_assertions())
+             * but PCR bitmap is sent per bank anyway so format of data passed
+             * to token won't have to be changed when it gets implemented.
+             */
+            uint32_t pcrs = 0;
+            for (unsigned ii = 0; ii < sel->pcrSelections[i].sizeofSelect; ii++)
+                pcrs |= sel->pcrSelections[i].pcrSelect[ii] << 8*ii;
+
+            QCBOREncode_OpenMapInMap(&ctx, alg);
+                QCBOREncode_AddUInt64ToMap(&ctx, "pcrs", pcrs);
+                QCBOREncode_OpenArrayInMap(&ctx, "pcr");
+                for (unsigned ii = 0; ii < __builtin_popcount(pcrs); ii++) {
+                    UsefulBufC ub = {vals_unb->digests[cursor].buffer,
+                                     vals_unb->digests[cursor].size};
+                    QCBOREncode_AddBytes(&ctx, ub);
+                    cursor++;
+                }
+                QCBOREncode_CloseArray(&ctx);
+            QCBOREncode_CloseMap(&ctx);
+        }
+    QCBOREncode_CloseMap(&ctx);
+
+    UsefulBufC EncodedCBOR;
+    QCBORError uErr;
+    uErr = QCBOREncode_Finish(&ctx, &EncodedCBOR);
+
+    if(uErr != QCBOR_SUCCESS) {
+        fprintf(stderr, "QCBOR error: %d\n", uErr);
+        return NULLUsefulBuf;
+    } else {
+        return UsefulBuf_Unconst(EncodedCBOR);
+    }
+}
+
 static UsefulBuf get_pcr_assertions(uint32_t pcrs)
 {
     UsefulBuf           ret = SizeCalculateUsefulBuf;
@@ -691,10 +702,9 @@ static UsefulBuf get_pcr_assertions(uint32_t pcrs)
     /* TODO: read available PCR banks with GetCapabilities() */
     TPML_PCR_SELECTION  pcr_sel =
     {
-        .count = 1,
+        .count = 3,
         .pcrSelections =
         {
-            /* Skipped to save space in TPML_DIGEST
             {
                 .hash = TPM2_ALG_SHA1,      // mandatory, deprecated
                 .sizeofSelect = 3,
@@ -705,7 +715,6 @@ static UsefulBuf get_pcr_assertions(uint32_t pcrs)
                     (pcrs >> 16) & 0xFF,
                 }
             },
-            */
             {
                 .hash = TPM2_ALG_SHA256,    // mandatory
                 .sizeofSelect = 3,
@@ -716,7 +725,6 @@ static UsefulBuf get_pcr_assertions(uint32_t pcrs)
                     (pcrs >> 16) & 0xFF,
                 }
             },
-            /* Skipped to save space in TPML_DIGEST
             {
                 .hash = TPM2_ALG_SHA384,    // mandatory since PTP version 1.04,
                                             // but only if TPM supports multiple
@@ -729,7 +737,6 @@ static UsefulBuf get_pcr_assertions(uint32_t pcrs)
                     (pcrs >> 16) & 0xFF,
                 }
             },
-            */
         }
     };
 
@@ -785,43 +792,11 @@ static UsefulBuf get_pcr_assertions(uint32_t pcrs)
         goto error;
     }
 
-    /* First pass calculates size, second pass does the marshaling */
-    for (int i = 0; i < 2; i++) {
-        size_t offset = 0;
-
-        /*
-         * This assumes that marshaling can't fail in second pass if it didn't
-         * in the first one
-         */
-        tss_ret = Tss2_MU_UINT32_Marshal(pcr_update_ctr, ret.ptr, ret.len,
-                                         &offset);
-        if (tss_ret != TSS2_RC_SUCCESS) {
-            fprintf(stderr, "Error: Tss2_MU_UINT32_Marshal() %s\n",
-                    Tss2_RC_Decode(tss_ret));
-            goto error;
-        }
-
-        tss_ret = Tss2_MU_TPML_PCR_SELECTION_Marshal(&pcr_sel_orig, ret.ptr,
-                                                     ret.len, &offset);
-        if (tss_ret != TSS2_RC_SUCCESS) {
-            fprintf(stderr, "Error: Tss2_MU_TPML_PCR_SELECTION_Marshal() %s\n",
-                    Tss2_RC_Decode(tss_ret));
-            goto error;
-        }
-
-        tss_ret = TPML_DIGEST_Marshal_unbounded(unbounded_pcr_vals, ret.ptr,
-                                                ret.len, &offset);
-        if (tss_ret != TSS2_RC_SUCCESS) {
-            fprintf(stderr, "Error: Tss2_MU_TPML_DIGEST_Marshal() %s\n",
-                    Tss2_RC_Decode(tss_ret));
-            goto error;
-        }
-
-        if (UsefulBuf_IsNULLOrEmpty(ret)) {
-            ret.ptr = malloc(offset);
-            ret.len = offset;
-        }
-    }
+    ret = cbor_pcr_assertions(SizeCalculateUsefulBuf, pcr_update_ctr,
+                              unbounded_pcr_vals, &pcr_sel_orig);
+    ret.ptr = malloc(ret.len);
+    ret = cbor_pcr_assertions(ret, pcr_update_ctr, unbounded_pcr_vals,
+                              &pcr_sel_orig);
 
 error:
     Esys_Free(pcr_sel_out);
