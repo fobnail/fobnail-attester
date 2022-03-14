@@ -181,16 +181,15 @@ UsefulBuf encode_meta(struct meta_data *meta)
     return ret;
 }
 
-UsefulBuf _encode_signed_object(UsefulBuf Buffer, uint8_t *object, size_t len) {
+UsefulBuf _encode_signed_object(UsefulBuf Buffer, UsefulBuf object) {
     QCBOREncodeContext ctx;
     QCBOREncode_Init(&ctx, Buffer);
 
-    UsefulBufC data = { object, len };
     // TODO: sign data using AIK
     UsefulBufC signature = { NULL, 0 };
 
     QCBOREncode_OpenMap(&ctx);
-        QCBOREncode_AddBytesToMap(&ctx, "data", data);
+        QCBOREncode_AddBytesToMap(&ctx, "data", UsefulBuf_Const(object));
         QCBOREncode_AddBytesToMap(&ctx, "signature", signature);
     QCBOREncode_CloseMap(&ctx);
 
@@ -206,13 +205,13 @@ UsefulBuf _encode_signed_object(UsefulBuf Buffer, uint8_t *object, size_t len) {
     }
 }
 
-UsefulBuf encode_signed_object(uint8_t *object, size_t len) {
+UsefulBuf encode_signed_object(UsefulBuf ub) {
     UsefulBuf ret = NULLUsefulBuf;
 
     //TODO: Error handling?
-    ret = _encode_signed_object(SizeCalculateUsefulBuf, object, len);
+    ret = _encode_signed_object(SizeCalculateUsefulBuf, ub);
     ret.ptr = malloc(ret.len);
-    ret = _encode_signed_object(ret, object, len);
+    ret = _encode_signed_object(ret, ub);
 
     return ret;
 }
@@ -247,7 +246,7 @@ static void coap_metadata_handler(struct coap_resource_t* resource, struct coap_
         return;
     }
 
-    ub = encode_signed_object(ub_meta.ptr, ub_meta.len);
+    ub = encode_signed_object(ub_meta);
     free(ub_meta.ptr);
     if (UsefulBuf_IsNULLOrEmpty(ub)) {
         fprintf(stderr, "Error: failed to sign metadata\n");
