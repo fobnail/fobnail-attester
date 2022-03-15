@@ -145,7 +145,7 @@ static int get_mac_addr(uint8_t *mac)
          */
         char relative_path[PATH_MAX*2];
         snprintf(relative_path, PATH_MAX *2, "%s/%s", SYS_CLASS_NET_PATH, link_buf);
-        
+
         char canonical_path[PATH_MAX];
         if (!realpath(relative_path, canonical_path)) {
             fprintf(stderr, "Failed to resolve canonical path of \"%s\": %s\n", dir->d_name, strerror(errno));
