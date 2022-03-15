@@ -182,41 +182,6 @@ UsefulBuf encode_meta(struct meta_data *meta)
     return ret;
 }
 
-UsefulBuf _encode_signed_object(UsefulBuf Buffer, UsefulBuf object) {
-    QCBOREncodeContext ctx;
-    QCBOREncode_Init(&ctx, Buffer);
-
-    // TODO: sign data using AIK
-    UsefulBufC signature = { NULL, 0 };
-
-    QCBOREncode_OpenMap(&ctx);
-        QCBOREncode_AddBytesToMap(&ctx, "data", UsefulBuf_Const(object));
-        QCBOREncode_AddBytesToMap(&ctx, "signature", signature);
-    QCBOREncode_CloseMap(&ctx);
-
-    UsefulBufC EncodedCBOR;
-    QCBORError uErr;
-    uErr = QCBOREncode_Finish(&ctx, &EncodedCBOR);
-
-    if(uErr != QCBOR_SUCCESS) {
-        fprintf(stderr, "QCBOR error: %d\n", uErr);
-        return NULLUsefulBuf;
-    } else {
-        return UsefulBuf_Unconst(EncodedCBOR);
-    }
-}
-
-UsefulBuf encode_signed_object(UsefulBuf ub) {
-    UsefulBuf ret = NULLUsefulBuf;
-
-    //TODO: Error handling?
-    ret = _encode_signed_object(SizeCalculateUsefulBuf, ub);
-    ret.ptr = malloc(ret.len);
-    ret = _encode_signed_object(ret, ub);
-
-    return ret;
-}
-
 static void coap_metadata_handler(struct coap_resource_t* resource, struct coap_session_t* session,
                                   const struct coap_pdu_t* in, const struct coap_string_t* query,
                                   struct coap_pdu_t* out)
@@ -247,7 +212,7 @@ static void coap_metadata_handler(struct coap_resource_t* resource, struct coap_
         return;
     }
 
-    ub = encode_signed_object(ub_meta);
+    ub = sign_with_aik(ub_meta);
     free(ub_meta.ptr);
     if (UsefulBuf_IsNULLOrEmpty(ub)) {
         fprintf(stderr, "Error: failed to sign metadata\n");
