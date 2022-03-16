@@ -52,7 +52,7 @@ if "$INIT_TPM_SIMULATOR" = "true"; then
              \____\_______/
 EOM
 
-  (/usr/local/bin/tpm-reset &) \
+  /usr/local/bin/tpm-reset \
   && echo 'Started TPM Simulator in working directory /tmp.'
   echo
 
