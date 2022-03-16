@@ -838,22 +838,9 @@ TSS2_RC init_tpm_keys(void)
     ESYS_TR                parent = ESYS_TR_NONE;
     ESYS_TR                aik = ESYS_TR_NONE;
     ESYS_TR                tmp_new, session;
-    TPM2B_TEMPLATE         inPublic;
     TPML_PCR_SELECTION     creationPCR = { .count = 0, };
     TPMS_CAPABILITY_DATA  *capabilityData = NULL;
     TPM2B_PRIVATE         *keyPrivate;
-
-    size_t out_size = 0;
-
-    tss_ret = Tss2_MU_TPMT_PUBLIC_Marshal(&keyTemplate.publicArea,
-                                          inPublic.buffer, sizeof(TPMT_PUBLIC),
-                                          &out_size);
-    if (tss_ret != TSS2_RC_SUCCESS){
-        fprintf(stderr, "Error: Tss2_MU_TPMT_PUBLIC_Marshal() %s\n",
-               Tss2_RC_Decode(tss_ret));
-        goto error;
-    }
-    inPublic.size = out_size;
 
     /* Initialize the Esys context */
 
