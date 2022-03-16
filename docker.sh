@@ -3,6 +3,7 @@
 set -euo pipefail
 
 INIT_TPM_SIMULATOR=${INIT_TPM_SIMULATOR:-false}
+FOBNAIL_LOG=${FOBNAIL_LOG:-info}
 
 die() {
     [ $# -ne 0 ] && echo "$@"
@@ -49,6 +50,7 @@ docker_run() {
       -e USER_ID="$(id -u)" \
       -e GROUP_ID="$(id -g)" \
       -e INIT_TPM_SIMULATOR="$INIT_TPM_SIMULATOR" \
+      -e FOBNAIL_LOG="$FOBNAIL_LOG" \
       --init \
       fobnail/fobnail-attester "$@"
 }
