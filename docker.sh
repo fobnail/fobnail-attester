@@ -43,6 +43,7 @@ docker_run() {
   fi
 
   docker run \
+      --privileged --network host \
       --rm "$_tty_opts" \
       --cap-add=NET_ADMIN \
       -v $PWD:/build \
