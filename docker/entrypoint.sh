@@ -63,6 +63,14 @@ EOM
   ./tools/tpm_manufacture.sh -t
 fi
 
+# Put certificate of CA signing EK to Fobnail's flash
+if "$PROVISION_EK_CA_CERT" = "true"; then
+  dd if=/dev/zero bs=4k count=32 of=flash.bin 2>/dev/null
+  ./bin/lfs -f flash.bin --format install-certificate --trusted ./tools/keys_and_certs/ca_cert.pem
+  ./bin/lfs -f flash.bin mkdir /trussed
+  ./bin/lfs -f flash.bin mkdir /trussed/dat
+fi
+
 # Run provided commands
 # Run shell if no commands were provided
 if [ -n "$1" ]; then

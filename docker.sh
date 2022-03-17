@@ -3,6 +3,7 @@
 set -euo pipefail
 
 INIT_TPM_SIMULATOR=${INIT_TPM_SIMULATOR:-false}
+PROVISION_EK_CA_CERT=${PROVISION_EK_CA_CERT:-false}
 FOBNAIL_LOG=${FOBNAIL_LOG:-info}
 
 die() {
@@ -51,6 +52,7 @@ docker_run() {
       -e USER_ID="$(id -u)" \
       -e GROUP_ID="$(id -g)" \
       -e INIT_TPM_SIMULATOR="$INIT_TPM_SIMULATOR" \
+      -e PROVISION_EK_CA_CERT="$PROVISION_EK_CA_CERT" \
       -e FOBNAIL_LOG="$FOBNAIL_LOG" \
       --init \
       fobnail/fobnail-attester "$@"
@@ -72,18 +74,29 @@ case $COMMAND in
     fi
     cp $FOBNAIL_DIR/target/x86_64-unknown-linux-gnu/debug/fobnail ./bin/
   ;;
+  "build-lfs")
+    [ -z "$FOBNAIL_DIR" ] && die "Please export FOBNAIL_DIR first"
+    if pushd &> /dev/null "$FOBNAIL_DIR"/tools/lfs; then
+      ../../build.sh --target=pc
+      popd &> /dev/null
+    fi
+    cp $FOBNAIL_DIR/tools/lfs/target/x86_64-unknown-linux-gnu/debug/lfs ./bin/
+  ;;
   "shell")
       docker_run bash
   ;;
   "run-tmux")
     [ ! -x "./bin/fobnail-attester" ] && die "./bin/fobnail-attester is not there. Run \"build-attester\" command first"
     [ ! -x "./bin/fobnail" ] && die "./bin/fobnail is not there. Run \"build-fobnail\" command first"
+    [ ! -x "./bin/lfs" ] && die "./bin/lfs is not there. Run \"build-lfs\" command first"
 
     INIT_TPM_SIMULATOR="true"
+    PROVISION_EK_CA_CERT="true"
 
+    # Sleeps are added so any error resulting in termination can be read
     docker_run tmux \
-      new-session  "./bin/fobnail-attester ; read" \; \
-      split-window "./bin/fobnail ; read" \; \
+      new-session  "sudo ./bin/fobnail-attester ; sleep 5; read" \; \
+      split-window "./bin/fobnail ; sleep 5; read" \; \
       select-layout even-horizontal
   ;;
   *)
