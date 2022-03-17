@@ -20,6 +20,8 @@ Usage: ./$(basename ${0}) command
                             the fobnail-attester application will be in bin/
         build-fobnail       build fobnail firmware application (pc target)
                             the fobnail application will be in bin/
+        build-lfs           build lfs tool which is used for reading/writing
+                            fobnail persistent storage
         shell               enter container and spawn bash shell
                             TPM simulator is started in the backtround
                             neither of the TPM application is started - they can
