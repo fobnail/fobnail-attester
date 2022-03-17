@@ -45,7 +45,7 @@ RUN git clone --recursive -b 'develop' \
 WORKDIR /tmp/libcoap
 RUN git checkout --recurse-submodules 2a329e1c763a47a910f075aad4478398aaaea400
 RUN ./autogen.sh \
-    && ./configure --disable-tests --disable-documentation --disable-manpages --enable-dtls --with-tinydtls --enable-fast-install \
+    && ./configure --exec-prefix=/usr --disable-tests --disable-documentation --disable-manpages --enable-dtls --with-tinydtls --enable-fast-install \
     && make -j \
     && make install \
     && rm -rfv /tmp/libcoap
