@@ -12,6 +12,7 @@
 #include <tss2/tss2_rc.h>
 #include <qcbor/UsefulBuf.h>
 #include <qcbor/qcbor_encode.h>
+#include <qcbor/qcbor_spiffy_decode.h>
 
 #include <fobnail-attester/meta.h>
 #include <fobnail-attester/tpm2-crypto.h>
@@ -19,6 +20,31 @@
 static volatile sig_atomic_t quit = 0;
 static const char LISTEN_ADDRESS[] = "0.0.0.0";
 static unsigned int port = COAP_DEFAULT_PORT; /* default port 5683 */
+
+// Extract nonce from given CBOR blob. Returned nonce is valid as long CBOR blob
+// is valid.
+static UsefulBufC get_nonce(UsefulBufC data) {
+    QCBORError uErr;
+    QCBORDecodeContext ctx;
+    UsefulBufC nonce;
+
+    if (UsefulBuf_IsNULLOrEmptyC(data))
+        return NULLUsefulBufC;
+
+    QCBORDecode_Init(&ctx, data, QCBOR_DECODE_MODE_NORMAL);
+    QCBORDecode_EnterMap(&ctx, NULL);
+        QCBORDecode_GetByteStringInMapSZ(&ctx, "nonce", &nonce);
+    QCBORDecode_ExitMap(&ctx);
+
+    uErr = QCBORDecode_Finish(&ctx);
+    if (uErr != QCBOR_SUCCESS) {
+        // TODO: should send error response
+        fprintf(stderr, "QCBOR error: %d\n", uErr);
+        nonce = NULLUsefulBufC;
+    }
+
+    return nonce;
+}
 
 static void signal_handler(int signum)
 {
@@ -189,8 +215,14 @@ static void coap_metadata_handler(struct coap_resource_t* resource, struct coap_
     int ret;
     UsefulBuf ub_meta;
     UsefulBuf ub;
+    UsefulBufC request;
+    UsefulBufC nonce = NULLUsefulBufC;
     struct meta_data meta;
     printf("Received message: %s\n", coap_get_uri_path(in)->s);
+
+    if (coap_get_data(in, &request.len, (const uint8_t**)&request.ptr)) {
+        nonce = get_nonce(request);
+    }
 
     /* Obtain meta information */
     memset(&meta, 0, sizeof(struct meta_data));
@@ -212,7 +244,7 @@ static void coap_metadata_handler(struct coap_resource_t* resource, struct coap_
         return;
     }
 
-    ub = sign_with_aik(ub_meta);
+    ub = sign_with_aik(ub_meta, UsefulBuf_Unconst(nonce));
     free(ub_meta.ptr);
     if (UsefulBuf_IsNULLOrEmpty(ub)) {
         fprintf(stderr, "Error: failed to sign metadata\n");
@@ -243,11 +275,17 @@ static void coap_rim_handler(struct coap_resource_t* resource, struct coap_sessi
                 struct coap_pdu_t* out)
 {
     int ret;
+    UsefulBufC request;
+    UsefulBufC nonce = NULLUsefulBufC;
 
     printf("Received message: %s\n", coap_get_uri_path(in)->s);
 
+    if (coap_get_data(in, &request.len, (const uint8_t**)&request.ptr)) {
+        nonce = get_nonce(request);
+    }
+
     /* TODO: maybe make it parameterized at COAP level? */
-    UsefulBuf ub = get_signed_rim(0xFFFFFF);
+    UsefulBuf ub = get_signed_rim(0xFFFFFF, UsefulBuf_Unconst(nonce));
     if (UsefulBuf_IsNULLOrEmpty(ub)) {
         fprintf(stderr, "Error: cannot obtain RIM\n");
         /* We probably should mention the error in response */
