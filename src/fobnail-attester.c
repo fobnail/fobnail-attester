@@ -23,12 +23,14 @@ static unsigned int port = COAP_DEFAULT_PORT; /* default port 5683 */
 
 // Extract nonce from given CBOR blob. Returned nonce is valid as long CBOR blob
 // is valid.
-static UsefulBufC get_nonce(UsefulBufC data) {
+static UsefulBufC get_nonce(const struct coap_pdu_t* in) {
     QCBORError uErr;
     QCBORDecodeContext ctx;
+    UsefulBufC data;
     UsefulBufC nonce;
 
-    if (UsefulBuf_IsNULLOrEmptyC(data))
+    if (!coap_get_data(in, &data.len, (const uint8_t**)&data.ptr)
+        || UsefulBuf_IsNULLOrEmptyC(data))
         return NULLUsefulBufC;
 
     QCBORDecode_Init(&ctx, data, QCBOR_DECODE_MODE_NORMAL);
@@ -215,14 +217,10 @@ static void coap_metadata_handler(struct coap_resource_t* resource, struct coap_
     int ret;
     UsefulBuf ub_meta;
     UsefulBuf ub;
-    UsefulBufC request;
-    UsefulBufC nonce = NULLUsefulBufC;
     struct meta_data meta;
     printf("Received message: %s\n", coap_get_uri_path(in)->s);
 
-    if (coap_get_data(in, &request.len, (const uint8_t**)&request.ptr)) {
-        nonce = get_nonce(request);
-    }
+    UsefulBufC nonce = get_nonce(in);
 
     /* Obtain meta information */
     memset(&meta, 0, sizeof(struct meta_data));
@@ -244,7 +242,7 @@ static void coap_metadata_handler(struct coap_resource_t* resource, struct coap_
         return;
     }
 
-    ub = sign_with_aik(ub_meta, UsefulBuf_Unconst(nonce));
+    ub = sign_with_aik(ub_meta, nonce);
     free(ub_meta.ptr);
     if (UsefulBuf_IsNULLOrEmpty(ub)) {
         fprintf(stderr, "Error: failed to sign metadata\n");
@@ -275,17 +273,13 @@ static void coap_rim_handler(struct coap_resource_t* resource, struct coap_sessi
                 struct coap_pdu_t* out)
 {
     int ret;
-    UsefulBufC request;
-    UsefulBufC nonce = NULLUsefulBufC;
 
     printf("Received message: %s\n", coap_get_uri_path(in)->s);
 
-    if (coap_get_data(in, &request.len, (const uint8_t**)&request.ptr)) {
-        nonce = get_nonce(request);
-    }
+    UsefulBufC nonce = get_nonce(in);
 
     /* TODO: maybe make it parameterized at COAP level? */
-    UsefulBuf ub = get_signed_rim(0xFFFFFF, UsefulBuf_Unconst(nonce));
+    UsefulBuf ub = get_signed_rim(0xFFFFFF, nonce);
     if (UsefulBuf_IsNULLOrEmpty(ub)) {
         fprintf(stderr, "Error: cannot obtain RIM\n");
         /* We probably should mention the error in response */

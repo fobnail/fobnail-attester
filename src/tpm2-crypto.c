@@ -529,24 +529,23 @@ static UsefulBuf concat_data_sign(UsefulBuf data, UsefulBuf sign, UsefulBuf buf)
     }
 }
 
-UsefulBuf sign_with_aik(UsefulBuf data, UsefulBuf nonce)
+UsefulBuf sign_with_aik(UsefulBuf data, UsefulBufC nonce)
 {
     UsefulBuf   ret = NULLUsefulBuf;
     UsefulBuf   signature = NULLUsefulBuf;
-    UsefulBuf   data_and_nonce = NULLUsefulBuf;
 
-    if (!UsefulBuf_IsNULLOrEmpty(nonce)) {
+    if (!UsefulBuf_IsNULLOrEmptyC(nonce)) {
+        UsefulBuf data_and_nonce;
+
         data_and_nonce.len = data.len + nonce.len;
         data_and_nonce.ptr = malloc(data_and_nonce.len);
         memcpy(data_and_nonce.ptr, data.ptr, data.len);
         memcpy((uint8_t*)data_and_nonce.ptr + data.len, nonce.ptr, nonce.len);
-    }
 
-    if (UsefulBuf_IsNULLOrEmpty(data_and_nonce)) {
-        signature = get_aik_signature(data);
-    } else {
         signature = get_aik_signature(data_and_nonce);
         free(data_and_nonce.ptr);
+    } else {
+        signature = get_aik_signature(data);
     }
     if (UsefulBuf_IsNULLOrEmpty(signature)) {
         fprintf(stderr, "Couldn't create signature with AIK\n");
@@ -821,7 +820,7 @@ error:
     return ret;
 }
 
-UsefulBuf get_signed_rim(uint32_t pcrs, UsefulBuf nonce)
+UsefulBuf get_signed_rim(uint32_t pcrs, UsefulBufC nonce)
 {
     UsefulBuf   ret = NULLUsefulBuf;
     UsefulBuf   data = NULLUsefulBuf;
