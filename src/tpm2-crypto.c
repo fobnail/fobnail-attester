@@ -654,6 +654,7 @@ static UsefulBuf cbor_pcr_assertions(UsefulBuf buf, uint32_t pcr_update_ctr,
 
     QCBOREncode_OpenMap(&ctx);
         QCBOREncode_AddUInt64ToMap(&ctx, "update_ctr", pcr_update_ctr);
+        QCBOREncode_OpenArrayInMap(&ctx, "banks");
         for (unsigned i = 0; i < sel->count; i++) {
             const char *alg = alg_name(sel->pcrSelections[i].hash);
 
@@ -667,7 +668,8 @@ static UsefulBuf cbor_pcr_assertions(UsefulBuf buf, uint32_t pcr_update_ctr,
             for (unsigned ii = 0; ii < sel->pcrSelections[i].sizeofSelect; ii++)
                 pcrs |= sel->pcrSelections[i].pcrSelect[ii] << 8*ii;
 
-            QCBOREncode_OpenMapInMap(&ctx, alg);
+            QCBOREncode_OpenMap(&ctx);
+                QCBOREncode_AddSZStringToMap(&ctx, "algo_name", alg);
                 QCBOREncode_AddUInt64ToMap(&ctx, "pcrs", pcrs);
                 QCBOREncode_OpenArrayInMap(&ctx, "pcr");
                 for (unsigned ii = 0; ii < __builtin_popcount(pcrs); ii++) {
@@ -679,6 +681,7 @@ static UsefulBuf cbor_pcr_assertions(UsefulBuf buf, uint32_t pcr_update_ctr,
                 QCBOREncode_CloseArray(&ctx);
             QCBOREncode_CloseMap(&ctx);
         }
+        QCBOREncode_CloseArray(&ctx);
     QCBOREncode_CloseMap(&ctx);
 
     UsefulBufC EncodedCBOR;
