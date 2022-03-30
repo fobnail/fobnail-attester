@@ -278,8 +278,7 @@ static void coap_rim_handler(struct coap_resource_t* resource, struct coap_sessi
 
     UsefulBufC nonce = get_nonce(in);
 
-    /* TODO: maybe make it parameterized at COAP level? */
-    UsefulBuf ub = get_signed_rim(0xFFFFFF, nonce);
+    UsefulBuf ub = get_signed_rim(nonce);
     if (UsefulBuf_IsNULLOrEmpty(ub)) {
         fprintf(stderr, "Error: cannot obtain RIM\n");
         /* We probably should mention the error in response */

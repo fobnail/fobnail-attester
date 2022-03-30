@@ -681,7 +681,7 @@ static UsefulBuf cbor_pcr_assertions(UsefulBuf buf, uint32_t pcr_update_ctr,
     }
 }
 
-static UsefulBuf get_pcr_assertions(uint32_t pcrs)
+static UsefulBuf get_pcr_assertions(void)
 {
     UsefulBuf           ret = SizeCalculateUsefulBuf;
     TSS2_RC             tss_ret;
@@ -698,55 +698,25 @@ static UsefulBuf get_pcr_assertions(uint32_t pcrs)
      * Tss2_MU_TPML_DIGEST_Marshal() has internal check for 'count' field so it
      * can't be used on unbounded version of TPML_DIGEST.
      */
-    TPML_DIGEST        *unbounded_pcr_vals = NULL;
-    /* TODO: read available PCR banks with GetCapabilities() */
-    TPML_PCR_SELECTION  pcr_sel =
-    {
-        .count = 3,
-        .pcrSelections =
-        {
-            {
-                .hash = TPM2_ALG_SHA1,      // mandatory, deprecated
-                .sizeofSelect = 3,
-                .pcrSelect =
-                {
-                    (pcrs >>  0) & 0xFF,
-                    (pcrs >>  8) & 0xFF,
-                    (pcrs >> 16) & 0xFF,
-                }
-            },
-            {
-                .hash = TPM2_ALG_SHA256,    // mandatory
-                .sizeofSelect = 3,
-                .pcrSelect =
-                {
-                    (pcrs >>  0) & 0xFF,
-                    (pcrs >>  8) & 0xFF,
-                    (pcrs >> 16) & 0xFF,
-                }
-            },
-            {
-                .hash = TPM2_ALG_SHA384,    // mandatory since PTP version 1.04,
-                                            // but only if TPM supports multiple
-                                            // banks of PCRs
-                .sizeofSelect = 3,
-                .pcrSelect =
-                {
-                    (pcrs >>  0) & 0xFF,
-                    (pcrs >>  8) & 0xFF,
-                    (pcrs >> 16) & 0xFF,
-                }
-            },
-        }
-    };
+    TPML_DIGEST          *unbounded_pcr_vals = NULL;
+    TPML_PCR_SELECTION    pcr_sel;
+    TPMS_CAPABILITY_DATA *cap;
+
+    tss_ret = Esys_GetCapability(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                                 ESYS_TR_NONE, TPM2_CAP_PCRS, 0,
+                                 1, NULL, &cap);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        fprintf(stderr, "Error: Esys_GetCapability() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    pcr_sel = cap->data.assignedPCR;
+
+    Esys_Free(cap);
 
     TPML_PCR_SELECTION  pcr_sel_orig = pcr_sel;
     unsigned            num_digests = get_num_of_digests(&pcr_sel);
-
-    if (__builtin_popcount(pcrs) == 0) {
-        fprintf(stderr, "Error: No PCRs selected\n");
-        goto error;
-    }
 
     unbounded_pcr_vals = malloc(sizeof(TPML_DIGEST) - sizeof(TPM2B_DIGEST[8])
                                 + num_digests * sizeof(TPM2B_DIGEST));
@@ -808,12 +778,12 @@ error:
     return ret;
 }
 
-UsefulBuf get_signed_rim(uint32_t pcrs, UsefulBufC nonce)
+UsefulBuf get_signed_rim(UsefulBufC nonce)
 {
     UsefulBuf   ret = NULLUsefulBuf;
     UsefulBuf   data = NULLUsefulBuf;
 
-    data = get_pcr_assertions(pcrs);
+    data = get_pcr_assertions();
     if (UsefulBuf_IsNULLOrEmpty(data)) {
         fprintf(stderr, "Empty PCR assertions\n");
         goto error;
