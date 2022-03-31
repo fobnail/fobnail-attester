@@ -55,6 +55,9 @@ static int get_bdf_from_path(const char *link_path, uint32_t *out_bdf)
     if (strncmp(link_path, "/sys/devices/pci", sizeof("/sys/devices/pci") - 1) != 0)
         return -1;
 
+    if (strstr(link_path, "usb"))
+        return -1;
+
     colon1 = strrchr(link_path, ':');
     slash1 = colon1;
     while (*slash1 && *slash1 != '/')

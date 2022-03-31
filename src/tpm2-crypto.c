@@ -630,20 +630,6 @@ static void update_pcr_selection(TPML_PCR_SELECTION *base,
     }
 }
 
-static const char *alg_name(uint16_t id)
-{
-    switch (id) {
-        case TPM2_ALG_SHA1:
-            return "sha1";
-        case TPM2_ALG_SHA256:
-            return "sha256";
-        case TPM2_ALG_SHA384:
-            return "sha384";
-        default:
-            return NULL;
-    }
-}
-
 static UsefulBuf cbor_pcr_assertions(UsefulBuf buf, uint32_t pcr_update_ctr,
                                      TPML_DIGEST const *vals_unb,
                                      TPML_PCR_SELECTION const *sel)
@@ -656,8 +642,6 @@ static UsefulBuf cbor_pcr_assertions(UsefulBuf buf, uint32_t pcr_update_ctr,
         QCBOREncode_AddUInt64ToMap(&ctx, "update_ctr", pcr_update_ctr);
         QCBOREncode_OpenArrayInMap(&ctx, "banks");
         for (unsigned i = 0; i < sel->count; i++) {
-            const char *alg = alg_name(sel->pcrSelections[i].hash);
-
             /*
              * Different banks may implement different sets of PCRs. Right now
              * this is not supported by attester (test in get_pcr_assertions())
@@ -669,7 +653,7 @@ static UsefulBuf cbor_pcr_assertions(UsefulBuf buf, uint32_t pcr_update_ctr,
                 pcrs |= sel->pcrSelections[i].pcrSelect[ii] << 8*ii;
 
             QCBOREncode_OpenMap(&ctx);
-                QCBOREncode_AddSZStringToMap(&ctx, "algo_name", alg);
+                QCBOREncode_AddUInt64ToMap(&ctx, "algo_id", sel->pcrSelections[i].hash);
                 QCBOREncode_AddUInt64ToMap(&ctx, "pcrs", pcrs);
                 QCBOREncode_OpenArrayInMap(&ctx, "pcr");
                 for (unsigned ii = 0; ii < __builtin_popcount(pcrs); ii++) {
