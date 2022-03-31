@@ -877,6 +877,7 @@ UsefulBuf do_quote(UsefulBuf in)
     ret = concat_data_sign(marshaled_attest, raw_sign, ret);
 
 error:
+    Esys_FlushContext(esys_ctx, session);
     Esys_Free(tpm_sign);
     Esys_Free(attest);
 
