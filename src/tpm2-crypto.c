@@ -94,6 +94,12 @@ static const TPM2B_PUBLIC keyTemplate = {
     }
 };
 
+/* Constant used by Esys_Sign() and Esys_Quote() */
+static const TPMT_SIG_SCHEME    sig_scheme = {
+    .scheme = TPM2_ALG_RSASSA,
+    .details.rsassa.hashAlg = TPM2_ALG_SHA256
+};
+
 #define AIK_NV_HANDLE       0x8100F0BA
 #define EK_NV_HANDLE        0x8100F0BE
 #define EK_CERT_NV_HANDLE   0x01C00002
@@ -393,11 +399,6 @@ static UsefulBuf get_aik_signature(UsefulBuf data)
     TPM2B_DIGEST           *digest = NULL;
     TPMT_SIGNATURE         *signature = NULL;
     TPM2B_AUTH              null_auth = { .size = 0 };
-    TPMT_SIG_SCHEME         sig_scheme =
-                            {
-                                .scheme = TPM2_ALG_RSASSA,
-                                .details.rsassa.hashAlg = TPM2_ALG_SHA256
-                            };
 
     tss_ret = Esys_StartAuthSession(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
                                     ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
@@ -833,7 +834,83 @@ error:
 
 UsefulBuf do_quote(UsefulBuf in)
 {
-    return NULLUsefulBuf;
+    TSS2_RC                tss_ret;
+    ESYS_TR                session, aik;
+    UsefulBuf              ret = NULLUsefulBuf;
+
+    TPM2B_ATTEST          *attest = NULL;
+    UsefulBuf              marshaled_attest = NULLUsefulBuf;
+    size_t                 offset = 0;
+
+    TPMT_SIGNATURE        *tpm_sign = NULL;
+    UsefulBuf              raw_sign = NULLUsefulBuf;
+
+    /* TODO: parse selection from 'in' */
+    TPML_PCR_SELECTION     selection = {
+        .count = 1,
+        .pcrSelections[0] = {
+            .hash = TPM2_ALG_SHA256,
+            .sizeofSelect = 3,
+            .pcrSelect = {0xff, 0x00, 0x06},
+        },
+    };
+    /* TODO: parse nonce from 'in' */
+    TPM2B_DATA             nonce = {.size = 0};
+
+    tss_ret = Esys_StartAuthSession(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+                                    &nonceCaller, TPM2_SE_HMAC, &sym_null,
+                                    TPM2_ALG_SHA256, &session);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        fprintf(stderr, "Error: Esys_StartAuthSession() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    tss_ret = Esys_TR_FromTPMPublic(esys_ctx, AIK_NV_HANDLE, ESYS_TR_NONE,
+                                    ESYS_TR_NONE, ESYS_TR_NONE, &aik);
+    if (tss_ret != TSS2_RC_SUCCESS){
+        fprintf(stderr, "Error: Esys_TR_FromTPMPublic() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    tss_ret = Esys_Quote(esys_ctx, aik, session, ESYS_TR_NONE, ESYS_TR_NONE,
+                         &nonce, &sig_scheme, &selection,
+                         &attest, &tpm_sign);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        fprintf(stderr, "Error: Esys_Quote() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        goto error;
+    }
+
+    /* Marshaled data will never be larger than unmarshaled */
+    marshaled_attest.ptr = malloc(sizeof(TPM2B_ATTEST));
+    marshaled_attest.len = sizeof(TPM2B_ATTEST);
+
+    tss_ret = Tss2_MU_TPM2B_ATTEST_Marshal(attest, marshaled_attest.ptr,
+                                           marshaled_attest.len, &offset);
+    if (tss_ret != TSS2_RC_SUCCESS) {
+        fprintf(stderr, "Error: Tss2_MU_TPM2B_ATTEST_Marshal() %s\n",
+                Tss2_RC_Decode(tss_ret));
+        return NULLUsefulBuf;
+    }
+
+    marshaled_attest.len = offset;
+
+    raw_sign.len = tpm_sign->signature.rsassa.sig.size;
+    raw_sign.ptr = malloc(raw_sign.len);
+    memcpy(raw_sign.ptr, tpm_sign->signature.rsassa.sig.buffer, raw_sign.len);
+
+    ret = concat_data_sign(marshaled_attest, raw_sign, SizeCalculateUsefulBuf);
+    ret.ptr = malloc(ret.len);
+    ret = concat_data_sign(marshaled_attest, raw_sign, ret);
+
+error:
+    Esys_Free(tpm_sign);
+    Esys_Free(attest);
+
+    return ret;
 }
 
 TSS2_RC init_tpm_keys(void)

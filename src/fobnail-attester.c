@@ -362,6 +362,8 @@ static void coap_quote_handler(struct coap_resource_t* resource, struct coap_ses
 
     printf("Received message: %s\n", coap_get_uri_path(in)->s);
 
+    /* No get_nonce() here, this nonce will be treated differently */
+
     coap_get_data_large(in, &len, &data, &offset, &total);
 
     /* First PDU */
