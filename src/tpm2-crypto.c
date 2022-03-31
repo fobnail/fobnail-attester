@@ -831,6 +831,11 @@ error:
     return ret;
 }
 
+UsefulBuf do_quote(UsefulBuf in)
+{
+    return NULLUsefulBuf;
+}
+
 TSS2_RC init_tpm_keys(void)
 {
     TSS2_RC                tss_ret = TSS2_RC_SUCCESS;

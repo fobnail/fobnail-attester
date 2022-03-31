@@ -351,6 +351,52 @@ static void coap_challenge_handler(struct coap_resource_t* resource, struct coap
     }
 }
 
+static void coap_quote_handler(struct coap_resource_t* resource, struct coap_session_t* session,
+                const struct coap_pdu_t* in, const struct coap_string_t* query,
+                struct coap_pdu_t* out)
+{
+    int ret;
+    size_t len, total, offset;
+    static UsefulBuf ub;
+    const uint8_t *data;
+
+    printf("Received message: %s\n", coap_get_uri_path(in)->s);
+
+    coap_get_data_large(in, &len, &data, &offset, &total);
+
+    /* First PDU */
+    if (UsefulBuf_IsNULLOrEmpty(ub)) {
+        ub.ptr = malloc(total);
+        ub.len = total;
+    }
+
+    memcpy((uint8_t *)ub.ptr + offset, data, len);
+
+    /* Last PDU */
+    if (total == offset + len) {
+        /* prepare and send response */
+        UsefulBuf ub2 = do_quote(ub);
+
+        coap_pdu_set_code(out, COAP_RESPONSE_CODE_CREATED);
+        ret = coap_add_data_large_response(resource,
+                           session,
+                           in,
+                           out,
+                           query,
+                           COAP_MEDIATYPE_APPLICATION_OCTET_STREAM,
+                           -1,
+                           0,
+                           ub2.len,
+                           ub2.ptr,
+                           coap_free_wrapper,
+                           ub2.ptr);
+        free(ub.ptr);
+        ub = NULLUsefulBuf;
+        if (ret == 0)
+            fprintf(stderr, "Err: cannot response.\n");
+    }
+}
+
 void att_coap_add_resource(struct coap_context_t* coap_context,
                coap_request_t method, const char* resource_name,
                coap_method_handler_t handler)
@@ -442,6 +488,7 @@ int main(int UNUSED argc, char UNUSED *argv[])
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "metadata", coap_metadata_handler);
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "rim", coap_rim_handler);
     att_coap_add_resource(coap_context, COAP_REQUEST_POST, "challenge", coap_challenge_handler);
+    att_coap_add_resource(coap_context, COAP_REQUEST_POST, "quote", coap_quote_handler);
 
     /* enter main loop */
     printf("Entering main loop.\n");
