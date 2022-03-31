@@ -802,11 +802,109 @@ error:
     return ret;
 }
 
+static void parse_quote_input(UsefulBuf in, TPM2B_DATA *nonce,
+                              TPML_PCR_SELECTION *sel)
+{
+    QCBORError              uErr;
+    QCBORDecodeContext      ctx;
+    QCBORItem               item = {0};
+    static const char       label[] = "banks";
+    UsefulBufC              raw_nonce = NULLUsefulBufC;
+    bool                    nonce_is_first;
+
+    memset(nonce, 0, sizeof(*nonce));
+    memset(sel, 0, sizeof(*sel));
+
+    QCBORDecode_Init(&ctx, UsefulBuf_Const(in), QCBOR_DECODE_MODE_NORMAL);
+    QCBORDecode_EnterMap(&ctx, NULL);
+        /*
+         * QCBORDecode_EnterArrayFromMapSZ() doesn't return QCBORItem so it
+         * isn't possible to get number of items in the array that way.
+         *
+         * Unfortunately, this complicates decoding in multiple ways:
+         * 1) We have to manually validate whether name of array is "banks".
+         *    Using memcmp() and strlen() because label is not null-terminated.
+         * 2) *FromMap() functions search whole map, but plain EnterArray does
+         *    not. We have to ask precisely for correct type of next item.
+         * 3) Order of items is not strictly specified, and Fobnail Token is
+         *    free to choose the order it prefers. In this case, we don't know
+         *    if first item in top-level map is "nonce" or "banks".
+         *
+         * Current implementation can handle different order of items. In
+         * comparison to fully spiffy solution, it can't parse CBOR with
+         * additional fields in top-level map, undefined in code below (unless
+         * "banks" is second label/data pair in that map).
+         */
+
+        /* Check type of first element - does not advance cursor */
+        uErr = QCBORDecode_PeekNext(&ctx, &item);
+        nonce_is_first = item.uDataType != QCBOR_TYPE_ARRAY;
+        if (nonce_is_first) {
+            /*
+             * Get nonce. This checks whole map for errors (e.g. duplicate
+             * labels) and in order to do so, cursor is moved to the end of
+             * current map (or array).
+             */
+            QCBORDecode_GetByteStringInMapSZ(&ctx, "nonce", &raw_nonce);
+            /* Rewind to start of current map (array) and skip first element */
+            QCBORDecode_Rewind(&ctx);
+            QCBORDecode_GetNext(&ctx, &item);
+        }
+
+        /* Parse array - cursor is advanced as needed */
+        QCBORDecode_EnterArray(&ctx, &item);
+            if (item.uDataType != QCBOR_TYPE_ARRAY ||
+                item.uLabelType != QCBOR_TYPE_TEXT_STRING ||
+                item.label.string.len != strlen(label) ||
+                memcmp(&label, item.label.string.ptr, strlen(label))) {
+                    fprintf(stderr, "Bad CBOR format for quote command\n");
+                    return;
+            }
+            sel->count = item.val.uCount;
+            for (unsigned i = 0; i < sel->count; i++) {
+                uint64_t tmp;
+                TPMS_PCR_SELECTION *cursel = &sel->pcrSelections[i];
+                QCBORDecode_EnterMap(&ctx, NULL);
+                    QCBORDecode_GetUInt64InMapSZ(&ctx, "algo_id", &tmp);
+                    cursel->hash = tmp;
+                    QCBORDecode_GetUInt64InMapSZ(&ctx, "pcrs", &tmp);
+                    cursel->sizeofSelect = 3;
+                    cursel->pcrSelect[0] = tmp >>  0 & 0xff;
+                    cursel->pcrSelect[1] = tmp >>  8 & 0xff;
+                    cursel->pcrSelect[2] = tmp >> 16 & 0xff;
+                QCBORDecode_ExitMap(&ctx);
+            }
+        QCBORDecode_ExitArray(&ctx);
+
+        if (!nonce_is_first) {
+            /*
+             * Get nonce from current nesting level - searches whole map (array)
+             * and cursor is moved to the end of it, but it won't be necessary
+             * anymore so don't bother rewinding.
+             */
+            QCBORDecode_GetByteStringInMapSZ(&ctx, "nonce", &raw_nonce);
+        }
+
+        nonce->size = raw_nonce.len;
+        memcpy((uint8_t *)nonce + 2, raw_nonce.ptr, raw_nonce.len);
+    QCBORDecode_ExitMap(&ctx);
+
+    /* Catch decoding error here */
+    uErr = QCBORDecode_Finish(&ctx);
+    if (uErr != QCBOR_SUCCESS) {
+        fprintf(stderr, "QCBOR error3: %d\n", uErr);
+        nonce->size = 0;
+        sel->count = 0;
+    }
+}
+
 UsefulBuf do_quote(UsefulBuf in)
 {
     TSS2_RC                tss_ret;
     ESYS_TR                session, aik;
     UsefulBuf              ret = NULLUsefulBuf;
+    TPML_PCR_SELECTION     selection;
+    TPM2B_DATA             nonce;
 
     TPM2B_ATTEST          *attest = NULL;
     UsefulBuf              marshaled_attest = NULLUsefulBuf;
@@ -815,17 +913,7 @@ UsefulBuf do_quote(UsefulBuf in)
     TPMT_SIGNATURE        *tpm_sign = NULL;
     UsefulBuf              raw_sign = NULLUsefulBuf;
 
-    /* TODO: parse selection from 'in' */
-    TPML_PCR_SELECTION     selection = {
-        .count = 1,
-        .pcrSelections[0] = {
-            .hash = TPM2_ALG_SHA256,
-            .sizeofSelect = 3,
-            .pcrSelect = {0xff, 0x00, 0x06},
-        },
-    };
-    /* TODO: parse nonce from 'in' */
-    TPM2B_DATA             nonce = {.size = 0};
+    parse_quote_input(in, &nonce, &selection);
 
     tss_ret = Esys_StartAuthSession(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
                                     ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
