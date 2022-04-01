@@ -942,8 +942,7 @@ UsefulBuf do_quote(UsefulBuf in)
     }
 
     raw_sign.len = tpm_sign->signature.rsassa.sig.size;
-    raw_sign.ptr = malloc(raw_sign.len);
-    memcpy(raw_sign.ptr, tpm_sign->signature.rsassa.sig.buffer, raw_sign.len);
+    raw_sign.ptr = tpm_sign->signature.rsassa.sig.buffer;
 
     attest_ub.ptr = &attest->attestationData[0];
     attest_ub.len = attest->size;
