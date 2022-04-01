@@ -907,8 +907,7 @@ UsefulBuf do_quote(UsefulBuf in)
     TPM2B_DATA             nonce;
 
     TPM2B_ATTEST          *attest = NULL;
-    UsefulBuf              marshaled_attest = NULLUsefulBuf;
-    size_t                 offset = 0;
+    UsefulBuf              attest_ub;
 
     TPMT_SIGNATURE        *tpm_sign = NULL;
     UsefulBuf              raw_sign = NULLUsefulBuf;
@@ -942,27 +941,15 @@ UsefulBuf do_quote(UsefulBuf in)
         goto error;
     }
 
-    /* Marshaled data will never be larger than unmarshaled */
-    marshaled_attest.ptr = malloc(sizeof(TPM2B_ATTEST));
-    marshaled_attest.len = sizeof(TPM2B_ATTEST);
-
-    tss_ret = Tss2_MU_TPM2B_ATTEST_Marshal(attest, marshaled_attest.ptr,
-                                           marshaled_attest.len, &offset);
-    if (tss_ret != TSS2_RC_SUCCESS) {
-        fprintf(stderr, "Error: Tss2_MU_TPM2B_ATTEST_Marshal() %s\n",
-                Tss2_RC_Decode(tss_ret));
-        return NULLUsefulBuf;
-    }
-
-    marshaled_attest.len = offset;
-
     raw_sign.len = tpm_sign->signature.rsassa.sig.size;
     raw_sign.ptr = malloc(raw_sign.len);
     memcpy(raw_sign.ptr, tpm_sign->signature.rsassa.sig.buffer, raw_sign.len);
 
-    ret = concat_data_sign(marshaled_attest, raw_sign, SizeCalculateUsefulBuf);
+    attest_ub.ptr = &attest->attestationData[0];
+    attest_ub.len = attest->size;
+    ret = concat_data_sign(attest_ub, raw_sign, SizeCalculateUsefulBuf);
     ret.ptr = malloc(ret.len);
-    ret = concat_data_sign(marshaled_attest, raw_sign, ret);
+    ret = concat_data_sign(attest_ub, raw_sign, ret);
 
 error:
     Esys_FlushContext(esys_ctx, session);
