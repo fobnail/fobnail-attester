@@ -598,6 +598,7 @@ static UsefulBuf get_aik_signature(UsefulBuf data)
     TPM2B_DIGEST           *digest = NULL;
     TPMT_SIGNATURE         *signature = NULL;
     TPM2B_AUTH              null_auth = { .size = 0 };
+    static uint32_t         hierarchy = ESYS_TR_RH_OWNER;
 
     tss_ret = Esys_StartAuthSession(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
                                     ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
@@ -613,9 +614,31 @@ static UsefulBuf get_aik_signature(UsefulBuf data)
     if (data.len <= TPM2_MAX_DIGEST_BUFFER) {
         buf.size = data.len;
         memcpy(buf.buffer, data.ptr, data.len);
+        /*
+         * 3rd argument from the end should be ESYS_TR_RH_OWNER, but earlier
+         * versions of TSS (<3.0) erroneously used TPM2_RH_OWNER instead. Both
+         * are defined as u32 integer type. To stay compatible with older
+         * software, new TSS accepts both, so we could use common version here,
+         * even though it is not compliant with ESAPI. This would print one
+         * error and one warning for each operation.
+         *
+         * https://github.com/tpm2-software/tpm2-tss/issues/1522
+         * https://github.com/tpm2-software/tpm2-tss/issues/1750
+         *
+         * Instead, use static variable for hierarchy and change it to old
+         * version on first error.
+         */
         tss_ret = Esys_Hash(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-                            &buf, TPM2_ALG_SHA256, ESYS_TR_RH_OWNER, &digest,
+                            &buf, TPM2_ALG_SHA256, hierarchy, &digest,
                             &ticket);
+        if (tss_ret != TSS2_RC_SUCCESS && hierarchy == ESYS_TR_RH_OWNER) {
+            fprintf(stderr, "Previous error might be caused by bug in TSS, "
+                    "trying to work around it\n");
+            hierarchy = TPM2_RH_OWNER;
+            tss_ret = Esys_Hash(esys_ctx, ESYS_TR_NONE, ESYS_TR_NONE,
+                                ESYS_TR_NONE, &buf, TPM2_ALG_SHA256, hierarchy,
+                                &digest, &ticket);
+        }
         if (tss_ret != TSS2_RC_SUCCESS) {
             fprintf(stderr, "Error: Esys_Hash() %s\n",
                     Tss2_RC_Decode(tss_ret));
@@ -668,7 +691,15 @@ static UsefulBuf get_aik_signature(UsefulBuf data)
         /* 'handle' is flushed by this function */
         tss_ret = Esys_SequenceComplete(esys_ctx, handle, ESYS_TR_PASSWORD,
                                         ESYS_TR_NONE, ESYS_TR_NONE, &buf,
-                                        ESYS_TR_RH_OWNER, &digest, &ticket);
+                                        hierarchy, &digest, &ticket);
+        if (tss_ret != TSS2_RC_SUCCESS && hierarchy == ESYS_TR_RH_OWNER) {
+            fprintf(stderr, "Previous error might be caused by bug in TSS, "
+                    "trying to work around it\n");
+            hierarchy = TPM2_RH_OWNER;
+            tss_ret = Esys_SequenceComplete(esys_ctx, handle, ESYS_TR_PASSWORD,
+                                            ESYS_TR_NONE, ESYS_TR_NONE, &buf,
+                                            hierarchy, &digest, &ticket);
+        }
         if (tss_ret != TSS2_RC_SUCCESS){
             fprintf(stderr, "Error: Esys_SequenceComplete() %s\n",
                     Tss2_RC_Decode(tss_ret));
