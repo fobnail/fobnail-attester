@@ -1166,6 +1166,7 @@ TSS2_RC init_tpm_keys(void)
     TPML_PCR_SELECTION     creationPCR = { .count = 0, };
     TPMS_CAPABILITY_DATA  *capabilityData = NULL;
     TPM2B_PRIVATE         *keyPrivate;
+    TSS2_ABI_VERSION       curVersion = TSS2_ABI_VERSION_CURRENT;
 
     /* Initialize the Esys context */
 
@@ -1176,7 +1177,13 @@ TSS2_RC init_tpm_keys(void)
         goto error;
     }
 
-    tss_ret = Esys_Initialize(&esys_ctx, tcti_ctx, NULL);
+    tss_ret = Esys_Initialize(&esys_ctx, tcti_ctx, &curVersion);
+    if (tss_ret == TSS2_SYS_RC_ABI_MISMATCH) {
+        fprintf(stderr, "Warning: Esys_Initialize() mismatch of API version "
+                        "between TSS headers and library. Some things may not "
+                        "work as expected.\n");
+        tss_ret = Esys_Initialize(&esys_ctx, tcti_ctx, NULL);
+    }
     if (tss_ret != TSS2_RC_SUCCESS) {
         fprintf(stderr, "Error: Esys_Initialize() %s\n",
                 Tss2_RC_Decode(tss_ret));
