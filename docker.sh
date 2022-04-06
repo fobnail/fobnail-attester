@@ -46,6 +46,7 @@ docker_run() {
   fi
 
   docker run \
+      --device /dev/net/tun \
       --privileged --network host \
       --rm "$_tty_opts" \
       --cap-add=NET_ADMIN \
