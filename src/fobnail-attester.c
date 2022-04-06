@@ -60,35 +60,6 @@ static void coap_free_wrapper(coap_session_t *session, void *app_ptr)
         free(app_ptr);
 }
 
-static void coap_attest_handler(struct coap_resource_t* resource, struct coap_session_t* session,
-                const struct coap_pdu_t* in, const struct coap_string_t* query,
-                struct coap_pdu_t* out)
-{
-    int ret;
-    char *res_buf = "Response from server.\n";
-    size_t res_buf_len = strlen(res_buf);
-
-    printf("Received message: %s\n", coap_get_uri_path(in)->s);
-
-    /* prepare and send response */
-    coap_pdu_set_code(out, COAP_RESPONSE_CODE_CONTENT);
-    ret = coap_add_data_large_response(resource,
-                       session,
-                       in,
-                       out,
-                       query,
-                       COAP_MEDIATYPE_APPLICATION_CBOR,
-                       -1,
-                       0,
-                       res_buf_len,
-                       (const uint8_t *)res_buf,
-                       NULL,
-                       res_buf);
-    if (ret == 0)
-        fprintf(stderr, "Err: cannot response.\n");
-
-}
-
 static void coap_ek_handler(struct coap_resource_t* resource, struct coap_session_t* session,
                 const struct coap_pdu_t* in, const struct coap_string_t* query,
                 struct coap_pdu_t* out)
@@ -483,7 +454,6 @@ int main(int UNUSED argc, char UNUSED *argv[])
 
     /* register CoAP resource and resource handler */
     printf("Registering CoAP resources.\n");
-    att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "attest", coap_attest_handler);
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "ek", coap_ek_handler);
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "aik", coap_aik_handler);
     att_coap_add_resource(coap_context, COAP_REQUEST_FETCH, "metadata", coap_metadata_handler);
