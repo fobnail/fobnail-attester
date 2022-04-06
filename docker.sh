@@ -96,9 +96,9 @@ case $COMMAND in
     PROVISION_EK_CA_CERT="true"
 
     # Sleeps are added so any error resulting in termination can be read
-    docker_run tmux \
-      new-session  "sudo ./bin/fobnail-attester ; sleep 5; read" \; \
-      split-window "./bin/fobnail ; sleep 5; read" \; \
+    docker_run tmux set -g pane-border-status top \; \
+      new-session "printf '\033]2;%s\033\\' 'Attester'; sudo ./bin/fobnail-attester ; sleep 5; read" \; \
+      split-window "printf '\033]2;%s\033\\' 'Verifier'; ./bin/fobnail ; sleep 5; read" \; \
       select-layout even-horizontal
   ;;
   *)
