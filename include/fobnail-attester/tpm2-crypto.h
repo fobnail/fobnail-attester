@@ -6,7 +6,7 @@
 TSS2_RC init_tpm_keys(void);
 void tpm_cleanup(void);
 
-UsefulBuf read_ek_cert(void);
+UsefulBuf get_ek_cert_chain(void);
 UsefulBuf get_aik(void);
 UsefulBuf get_signed_rim(UsefulBufC nonce);
 UsefulBuf do_challenge(UsefulBuf in);

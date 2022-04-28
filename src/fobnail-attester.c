@@ -68,7 +68,7 @@ static void coap_ek_handler(struct coap_resource_t* resource, struct coap_sessio
 
     printf("Received message: %s\n", coap_get_uri_path(in)->s);
 
-    UsefulBuf ub = read_ek_cert();
+    UsefulBuf ub = get_ek_cert_chain();
     if (UsefulBuf_IsNULLOrEmpty(ub)) {
         fprintf(stderr, "Error: cannot obtain EK certificate\n");
         /* We probably should mention the error in response */
@@ -83,7 +83,7 @@ static void coap_ek_handler(struct coap_resource_t* resource, struct coap_sessio
                        in,
                        out,
                        query,
-                       COAP_MEDIATYPE_APPLICATION_OCTET_STREAM,
+                       COAP_MEDIATYPE_APPLICATION_CBOR,
                        -1,
                        0,
                        ub.len,
