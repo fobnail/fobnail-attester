@@ -159,7 +159,7 @@ static TSS2_RC start_policy_auth(ESYS_TR *session)
     return TSS2_RC_SUCCESS;
 }
 
-UsefulBuf read_ek_cert(void)
+static UsefulBuf read_ek_cert(void)
 {
     UsefulBuf             ret = NULLUsefulBuf;
     TSS2_RC               tss_ret;
@@ -259,6 +259,60 @@ UsefulBuf read_ek_cert(void)
 
 error:
     Esys_FlushContext(esys_ctx, session);
+    return ret;
+}
+
+static UsefulBuf _cbor_cert_chain(UsefulBuf buf, size_t num, UsefulBufC *certs)
+{
+    QCBOREncodeContext ctx;
+    UsefulBufC enc;
+    QCBORError err;
+    QCBOREncode_Init(&ctx, buf);
+
+    QCBOREncode_OpenMap(&ctx);
+        QCBOREncode_OpenArrayInMap(&ctx, "certs");
+        for (size_t i = 0; i < num; i++)
+            QCBOREncode_AddBytes(&ctx, certs[i]);
+        QCBOREncode_CloseArray(&ctx);
+    QCBOREncode_CloseMap(&ctx);
+
+    err = QCBOREncode_Finish(&ctx, &enc);
+
+    if(err != QCBOR_SUCCESS) {
+        fprintf(stderr, "QCBOR error: %d\n", err);
+        return NULLUsefulBuf;
+    } else {
+        return UsefulBuf_Unconst(enc);
+    }
+}
+
+static void free_cert_chain(size_t size, UsefulBufC *p)
+{
+    for (size_t i = 0; i < size; i++) {
+        /* FIXME: other certs in chain will have to use OPENSSL_free() */
+        free((void*)p[i].ptr);
+    }
+    free(p);
+}
+
+UsefulBuf get_ek_cert_chain(void)
+{
+    //UsefulBufC *certs = NULL;
+    UsefulBufC certs[1];
+    UsefulBuf ret = SizeCalculateUsefulBuf;
+    int num_certs;
+
+    /* TODO: obtain whole chain */
+    //num_certs = get_cert_chain(&certs);
+    num_certs = 1;
+    certs[0] = UsefulBuf_Const(read_ek_cert());
+
+    ret = _cbor_cert_chain(ret, num_certs, certs);
+    ret.ptr = malloc(ret.len);
+    ret = _cbor_cert_chain(ret, num_certs, certs);
+
+    free_cert_chain(num_certs, certs);
+
     return ret;
 }
 
