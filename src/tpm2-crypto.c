@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <string.h>
+#include <curl/curl.h>
 #include <openssl/evp.h>
+#include <openssl/safestack.h>
+#include <openssl/x509v3.h>
 #include <tss2/tss2_rc.h>
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_mu.h>
@@ -271,7 +274,7 @@ static UsefulBuf _cbor_cert_chain(UsefulBuf buf, size_t num, UsefulBufC *certs)
 
     QCBOREncode_OpenMap(&ctx);
         QCBOREncode_OpenArrayInMap(&ctx, "certs");
-        for (size_t i = 0; i < num; i++)
+        for (int i = num - 1; i >= 0; i--)
             QCBOREncode_AddBytes(&ctx, certs[i]);
         QCBOREncode_CloseArray(&ctx);
     QCBOREncode_CloseMap(&ctx);
@@ -286,32 +289,154 @@ static UsefulBuf _cbor_cert_chain(UsefulBuf buf, size_t num, UsefulBufC *certs)
     }
 }
 
-static void free_cert_chain(size_t size, UsefulBufC *p)
+/*
+ * Authority Info Access and CA Issuers field is required by Windows 10 and
+ * newer, but not strictly required by TPM specification. This may render some
+ * TPMs unusable, but I haven't seen a TPM that has EK certificate without those
+ * fields.
+ */
+/* Based on X509_get1_ocsp() */
+static unsigned char *X509_get_ca_url(X509 *x)
 {
-    for (size_t i = 0; i < size; i++) {
-        /* FIXME: other certs in chain will have to use OPENSSL_free() */
-        free((void*)p[i].ptr);
+    AUTHORITY_INFO_ACCESS *info;
+    unsigned char *ret = NULL;
+    int i, len;
+
+    info = X509_get_ext_d2i(x, NID_info_access, NULL, NULL);
+    if (!info)
+        return NULL;
+    for (i = 0; i < sk_ACCESS_DESCRIPTION_num(info); i++) {
+        ACCESS_DESCRIPTION *ad = sk_ACCESS_DESCRIPTION_value(info, i);
+        if (OBJ_obj2nid(ad->method) == NID_ad_ca_issuers) {
+            if (ad->location->type == GEN_URI) {
+                len = ASN1_STRING_to_UTF8(&ret, ad->location->d.uniformResourceIdentifier);
+                if (len < 0)
+                    ret = NULL;
+                break;
+            }
+        }
     }
-    free(p);
+    AUTHORITY_INFO_ACCESS_free(info);
+    return ret;
 }
+
+static X509 *UsefulBufC_to_X509(UsefulBufC ub)
+{
+    /* Pointer to buffer is modified by d2i_* functions, make a copy */
+    const unsigned char *tmp_ptr = ub.ptr;
+    return d2i_X509(NULL, &tmp_ptr, ub.len);
+}
+
+static size_t curl_cb(void *contents, size_t size, size_t nmemb, void *userp)
+{
+    size_t realsize = size * nmemb;
+    UsefulBuf *mem = (UsefulBuf *)userp;
+
+    char *ptr = realloc(mem->ptr, mem->len + realsize);
+    if(!ptr) {
+        /* out of memory! */
+        printf("not enough memory (realloc returned NULL)\n");
+        return 0;
+    }
+
+    mem->ptr = ptr;
+    memcpy(&ptr[mem->len], contents, realsize);
+    mem->len += realsize;
+
+    return realsize;
+}
+
+static UsefulBufC get_next_cert(UsefulBufC prev)
+{
+    X509 *x509 = NULL;
+    unsigned char *url = NULL;
+    UsefulBuf ret = NULLUsefulBuf;
+    CURL *curl;
+    CURLcode res;
+
+    x509 = UsefulBufC_to_X509(prev);
+    url = X509_get_ca_url(x509);
+    if (url == NULL) {
+        /* Print error only if certificate is not self-issued (root CA) */
+        if (X509_check_issued(x509, x509) != X509_V_OK)
+            fprintf(stderr, "CA URL not found!\n");
+        goto error;
+    }
+
+    printf("Downloading %s\n", url);
+
+    curl = curl_easy_init();
+    if(curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+
+        /* Send all data to this function  */
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_cb);
+
+        /* We pass our UsefulBuf to the callback function */
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&ret);
+
+        /* Perform the request, res will get the return code */
+        res = curl_easy_perform(curl);
+        /* Check for errors */
+        if(res != CURLE_OK)
+            fprintf(stderr, "curl_easy_perform() failed: %s\n",
+                    curl_easy_strerror(res));
+
+        /* Always clean up */
+        curl_easy_cleanup(curl);
+    }
+
+error:
+    X509_free(x509);
+    OPENSSL_free(url);
+
+    return UsefulBuf_Const(ret);
+}
+
+#define MAX_EK_CERT_CHAIN       5
 
 UsefulBuf get_ek_cert_chain(void)
 {
-    //UsefulBufC *certs = NULL;
-    UsefulBufC certs[1];
+    /*
+     * Note: Fobnail expects certificates in order:
+     * - intermediate immediately under root
+     * - second...nth intermediate
+     * - EK certificate
+     *
+     * We start parsing from leaf (i.e. EK certificate) and don't know in
+     * advance how long the chain will be, so we're using reversed order here.
+     * _cbor_cert_chain() parses this array from the end, which converts to the
+     * order expected by Fobnail.
+     *
+     * Root CA certificate is not sent. Instead of subtracting one after final
+     * loop iteration, we're not increasing number of certificates after storing
+     * EK certificate in the array.
+     */
+    size_t num_certs = 0;
+    UsefulBufC certs[MAX_EK_CERT_CHAIN] = {0};
     UsefulBuf ret = SizeCalculateUsefulBuf;
-    int num_certs;
 
-    /* TODO: obtain whole chain */
-    //num_certs = get_cert_chain(&certs);
-    num_certs = 1;
+    /* Read EK certificate from TPM */
     certs[0] = UsefulBuf_Const(read_ek_cert());
+    if (UsefulBuf_IsNULLOrEmptyC(certs[0]))
+        goto error;
+
+    for (int i = 1; i < MAX_EK_CERT_CHAIN; i++) {
+        certs[i] = get_next_cert(certs[i-1]);
+        if (UsefulBuf_IsNULLOrEmptyC(certs[i]))
+            break;
+        num_certs++;
+    }
 
     ret = _cbor_cert_chain(ret, num_certs, certs);
     ret.ptr = malloc(ret.len);
     ret = _cbor_cert_chain(ret, num_certs, certs);
 
-    free_cert_chain(num_certs, certs);
+error:
+    for (int i = 0; i < MAX_EK_CERT_CHAIN; i++) {
+        OPENSSL_free((void *)certs[i].ptr);
+    }
 
     return ret;
 }
