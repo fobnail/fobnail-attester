@@ -333,9 +333,9 @@ static size_t curl_cb(void *contents, size_t size, size_t nmemb, void *userp)
     UsefulBuf *mem = (UsefulBuf *)userp;
 
     char *ptr = realloc(mem->ptr, mem->len + realsize);
-    if(!ptr) {
+    if (!ptr) {
         /* out of memory! */
-        printf("not enough memory (realloc returned NULL)\n");
+        fprintf(stderr, "Not enough memory (realloc returned NULL)\n");
         return 0;
     }
 
@@ -346,6 +346,12 @@ static size_t curl_cb(void *contents, size_t size, size_t nmemb, void *userp)
     return realsize;
 }
 
+/*
+ * Returns:
+ * - valid non-NULL, non-empty UB on success
+ * - NULL, empty UB on root CA (i.e. self-issued certificate)
+ * - NULL, non-empty on error
+ */
 static UsefulBufC get_next_cert(UsefulBufC prev)
 {
     X509 *x509 = NULL;
@@ -357,16 +363,21 @@ static UsefulBufC get_next_cert(UsefulBufC prev)
     x509 = UsefulBufC_to_X509(prev);
     url = X509_get_ca_url(x509);
     if (url == NULL) {
+        /* Test if this is root CA or malformed certificate */
+        ret.len = X509_check_issued(x509, x509);
+
         /* Print error only if certificate is not self-issued (root CA) */
-        if (X509_check_issued(x509, x509) != X509_V_OK)
-            fprintf(stderr, "CA URL not found!\n");
+        if (ret.len != X509_V_OK)
+            fprintf(stderr, "CA URL not found on non-root CA: %s\n",
+                    X509_verify_cert_error_string(ret.len));
+
         goto error;
     }
 
     printf("Downloading %s\n", url);
 
     curl = curl_easy_init();
-    if(curl) {
+    if (curl) {
         curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 
@@ -379,7 +390,7 @@ static UsefulBufC get_next_cert(UsefulBufC prev)
         /* Perform the request, res will get the return code */
         res = curl_easy_perform(curl);
         /* Check for errors */
-        if(res != CURLE_OK)
+        if (res != CURLE_OK)
             fprintf(stderr, "curl_easy_perform() failed: %s\n",
                     curl_easy_strerror(res));
 
@@ -409,9 +420,10 @@ UsefulBuf get_ek_cert_chain(void)
      * _cbor_cert_chain() parses this array from the end, which converts to the
      * order expected by Fobnail.
      *
-     * Root CA certificate is not sent. Instead of subtracting one after final
-     * loop iteration, we're not increasing number of certificates after storing
-     * EK certificate in the array.
+     * Root CA certificate is not sent, so one is subtracted from the number of
+     * certificates when root CA is found. This doesn't happen in case of
+     * malformed certificate (e.g. no AIA extension) to handle chains generated
+     * with tpm_manufacture.sh without need for HTTP server for hosting chains.
      */
     size_t num_certs = 0;
     UsefulBufC certs[MAX_EK_CERT_CHAIN] = {0};
@@ -422,10 +434,19 @@ UsefulBuf get_ek_cert_chain(void)
     if (UsefulBuf_IsNULLOrEmptyC(certs[0]))
         goto error;
 
+    num_certs++;
+
     for (int i = 1; i < MAX_EK_CERT_CHAIN; i++) {
         certs[i] = get_next_cert(certs[i-1]);
-        if (UsefulBuf_IsNULLOrEmptyC(certs[i]))
+
+        if (UsefulBuf_IsNULLC(certs[i])) {
+            /* If error, include current certificate, if root - skip it */
+            if (UsefulBuf_IsEmptyC(certs[i]))
+                num_certs--;
+
             break;
+        }
+
         num_certs++;
     }
 
