@@ -368,8 +368,7 @@ static UsefulBufC get_next_cert(UsefulBufC prev)
 
         /* Print error only if certificate is not self-issued (root CA) */
         if (ret.len != X509_V_OK)
-            fprintf(stderr, "CA URL not found on non-root CA: %s\n",
-                    X509_verify_cert_error_string(ret.len));
+            fprintf(stderr, "CA URL not found on non-root CA\n");
 
         goto error;
     }
