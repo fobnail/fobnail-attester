@@ -116,8 +116,10 @@ static int get_mac_addr(uint8_t *mac)
     if (!link_buf)
         PRINT_ERR_RET("ERR: Cannot allocate memory: %s\n", strerror(errno));
 
-    if ((d = opendir(SYS_CLASS_NET_PATH)) == NULL)
+    if ((d = opendir(SYS_CLASS_NET_PATH)) == NULL) {
+        free(link_buf);
         PRINT_ERR_RET("ERR: Cannot open directory %s\n", SYS_CLASS_NET_PATH);
+    }
 
     while ((dir = readdir(d)) != NULL) {
         uint32_t curr_bdf;
