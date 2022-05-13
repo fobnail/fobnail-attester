@@ -23,7 +23,6 @@ else
 fi
 
 # Create fobnail tap interface
-mkdir -p /dev/net && mknod /dev/net/tun c 10 200 && chmod 0666 /dev/net/tun
 ip tuntap add fobnail0 mode tap user builder
 ip addr add 169.254.0.8/16 dev fobnail0
 ip link set dev fobnail0 up
